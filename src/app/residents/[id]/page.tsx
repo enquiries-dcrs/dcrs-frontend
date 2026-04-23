@@ -365,6 +365,181 @@ function ActivitiesTab({ residentId, isReadOnly }: { residentId: string; isReadO
   );
 }
 
+function DailyCareTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const [chartDate, setChartDate] = useState<string>(todayIsoDate());
+  const items = [
+    'Bath',
+    'Hair',
+    'Nails',
+    'Bowels Open',
+    'Fluids',
+    'Medicate',
+    'Visitors',
+    'Been out',
+    'Stayed in',
+    'Other',
+  ] as const;
+
+  const [careItem, setCareItem] = useState<(typeof items)[number]>(items[0]);
+  const [value, setValue] = useState('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['daily-care', residentId, chartDate],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/daily-care`, {
+        params: { date: chartDate },
+      });
+      return data as { entries: any[] };
+    },
+  });
+
+  const entries = data?.entries || [];
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await api.post(`/api/v1/residents/${residentId}/daily-care`, {
+        careItem,
+        value: value.trim() || null,
+        notes: notes.trim() || null,
+        date: chartDate,
+      });
+      setValue('');
+      setNotes('');
+      await queryClient.invalidateQueries({ queryKey: ['daily-care', residentId, chartDate] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not add daily care entry. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-4 border-b border-gray-200 bg-slate-50 flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-gray-600">Date</label>
+            <input
+              type="date"
+              value={chartDate}
+              onChange={(e) => setChartDate(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div className="sm:ml-auto text-xs text-gray-500">{entries.length} entr{entries.length === 1 ? 'y' : 'ies'}</div>
+        </div>
+
+        {!isReadOnly && (
+          <div className="p-4 border-b border-gray-200 grid grid-cols-1 md:grid-cols-6 gap-3">
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Item</label>
+              <select
+                value={careItem}
+                onChange={(e) => setCareItem(e.target.value as any)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {items.map((i) => (
+                  <option key={i} value={i}>
+                    {i}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Value (optional)</label>
+              <input
+                type="text"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="E.g. Yes / No / 500ml"
+              />
+            </div>
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Notes (optional)</label>
+              <input
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="E.g. Assisted, tolerated well"
+              />
+            </div>
+            <div className="md:col-span-6 flex justify-end">
+              <button
+                type="button"
+                onClick={submit}
+                disabled={saving}
+                className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                Add entry
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="divide-y divide-gray-100">
+          {isLoading ? (
+            <div className="p-8 text-center text-gray-500">Loading chart…</div>
+          ) : error ? (
+            <div className="p-8 text-center text-rose-600">Could not load chart.</div>
+          ) : entries.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">No entries for this day.</div>
+          ) : (
+            items.map((i) => {
+              const bucket = entries.filter((e: any) => e.care_item === i);
+              return (
+                <div key={i} className="p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-gray-900">{i}</h4>
+                    <span className="text-xs text-gray-500">{bucket.length} entr{bucket.length === 1 ? 'y' : 'ies'}</span>
+                  </div>
+                  {bucket.length === 0 ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-gray-500">
+                      No entries
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {bucket.map((e: any) => (
+                        <div key={e.id} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              {e.value ? (
+                                <span className="text-xs font-semibold text-gray-700 bg-slate-100 border border-slate-200 rounded px-2 py-0.5">
+                                  {e.value}
+                                </span>
+                              ) : null}
+                              {e.notes ? (
+                                <p className="text-sm text-gray-900 break-words">{e.notes}</p>
+                              ) : (
+                                <p className="text-sm text-gray-500">No notes</p>
+                              )}
+                            </div>
+                            <p className="mt-1 text-xs text-gray-500">
+                              {e.recorded_by ? `By ${e.recorded_by} • ` : null}
+                              {e.created_at ? new Date(e.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ResidentProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = React.use(params);
   const router = useRouter();
@@ -446,7 +621,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   }
 
   const isReadOnly = resident.status === 'ARCHIVED';
-  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Activities', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
+  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
@@ -938,6 +1113,11 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       {/* --- TAB: ACTIVITIES --- */}
       {activeTab === 'Activities' && (
         <ActivitiesTab residentId={resident.id} isReadOnly={isReadOnly} />
+      )}
+
+      {/* --- TAB: DAILY CARE --- */}
+      {activeTab === 'Daily care' && (
+        <DailyCareTab residentId={resident.id} isReadOnly={isReadOnly} />
       )}
 
       {/* --- TAB: NOTES & INCIDENTS --- */}
