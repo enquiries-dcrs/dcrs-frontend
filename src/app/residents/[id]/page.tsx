@@ -25,6 +25,7 @@ function todayIsoDate(): string {
 function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: boolean }) {
   const queryClient = useQueryClient();
   const [chartDate, setChartDate] = useState<string>(todayIsoDate());
+  const [period, setPeriod] = useState<'Breakfast' | 'Mid-morning' | 'Lunch' | 'Mid-Afternoon' | 'Evening' | 'Bedtime'>('Breakfast');
   const [entryType, setEntryType] = useState<'FOOD' | 'DRINK'>('DRINK');
   const [description, setDescription] = useState('');
   const [amountMl, setAmountMl] = useState('');
@@ -53,6 +54,7 @@ function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isRea
     setSaving(true);
     try {
       await api.post(`/api/v1/residents/${residentId}/food-drink`, {
+        period,
         entryType,
         description: desc,
         amountMl: amountMl.trim() === '' ? null : Number(amountMl),
@@ -90,6 +92,21 @@ function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isRea
 
         {!isReadOnly && (
           <div className="p-4 border-b border-gray-200 grid grid-cols-1 md:grid-cols-6 gap-3">
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Period</label>
+              <select
+                value={period}
+                onChange={(e) => setPeriod(e.target.value as any)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="Breakfast">Breakfast</option>
+                <option value="Mid-morning">Mid-morning</option>
+                <option value="Lunch">Lunch</option>
+                <option value="Mid-Afternoon">Mid-Afternoon</option>
+                <option value="Evening">Evening</option>
+                <option value="Bedtime">Bedtime</option>
+              </select>
+            </div>
             <div className="md:col-span-1">
               <label className="mb-1 block text-xs font-semibold text-gray-600">Type</label>
               <select
@@ -101,7 +118,7 @@ function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isRea
                 <option value="FOOD">Food</option>
               </select>
             </div>
-            <div className="md:col-span-4">
+            <div className="md:col-span-3">
               <label className="mb-1 block text-xs font-semibold text-gray-600">Description</label>
               <input
                 type="text"
@@ -146,35 +163,61 @@ function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isRea
           ) : entries.length === 0 ? (
             <div className="p-8 text-center text-gray-500">No entries for this day.</div>
           ) : (
-            entries.map((e: any) => (
-              <div key={e.id} className="p-4 flex items-start gap-4">
-                <div className="mt-0.5 shrink-0">
-                  <span
-                    className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
-                      e.entry_type === 'DRINK'
-                        ? 'bg-sky-100 text-sky-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {e.entry_type === 'DRINK' ? 'Drink' : 'Food'}
-                  </span>
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <p className="text-sm font-medium text-gray-900 break-words">{e.description}</p>
-                    {e.amount_ml != null && e.amount_ml !== '' ? (
-                      <span className="text-xs font-semibold text-gray-700 bg-slate-100 border border-slate-200 rounded px-2 py-0.5">
-                        {e.amount_ml} ml
-                      </span>
-                    ) : null}
+            ([
+              'Breakfast',
+              'Mid-morning',
+              'Lunch',
+              'Mid-Afternoon',
+              'Evening',
+              'Bedtime',
+            ] as const).map((p) => {
+              const bucket = entries.filter((e: any) => (e.period || 'Lunch') === p);
+              return (
+                <div key={p} className="p-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-gray-900">{p}</h4>
+                    <span className="text-xs text-gray-500">{bucket.length} entr{bucket.length === 1 ? 'y' : 'ies'}</span>
                   </div>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {e.recorded_by ? `By ${e.recorded_by} • ` : null}
-                    {e.created_at ? new Date(e.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                  </p>
+                  {bucket.length === 0 ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-gray-500">
+                      No entries
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {bucket.map((e: any) => (
+                        <div key={e.id} className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white p-3">
+                          <div className="mt-0.5 shrink-0">
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                e.entry_type === 'DRINK'
+                                  ? 'bg-sky-100 text-sky-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {e.entry_type === 'DRINK' ? 'Drink' : 'Food'}
+                            </span>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <p className="text-sm font-medium text-gray-900 break-words">{e.description}</p>
+                              {e.amount_ml != null && e.amount_ml !== '' ? (
+                                <span className="text-xs font-semibold text-gray-700 bg-slate-100 border border-slate-200 rounded px-2 py-0.5">
+                                  {e.amount_ml} ml
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="mt-1 text-xs text-gray-500">
+                              {e.recorded_by ? `By ${e.recorded_by} • ` : null}
+                              {e.created_at ? new Date(e.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
