@@ -6,6 +6,7 @@ import { Sidebar } from './Sidebar';
 import Header from '@/components/Header';
 import { useGlobalStore } from '@/store/useGlobalStore';
 import { createClient } from '@supabase/supabase-js';
+import { api } from '@/lib/api';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
@@ -54,11 +55,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         if (isAuthenticated) logout();
         if (!isPublicPath(pathname)) router.push('/');
       } else if (!isAuthenticated && session) {
-        login({
-          name: session.user.user_metadata?.full_name || 'System User',
-          email: session.user.email || '',
-          role: session.user.user_metadata?.role || 'Staff',
-        });
+        try {
+          const { data: me } = await api.get<{
+            email: string;
+            first_name: string | null;
+            last_name: string | null;
+            system_role: string;
+          }>('/api/v1/auth/me');
+          const displayName =
+            `${me.first_name ?? ''} ${me.last_name ?? ''}`.trim() || me.email;
+          login({
+            name: displayName,
+            email: me.email,
+            role: me.system_role,
+          });
+        } catch {
+          await supabase.auth.signOut();
+          if (!isPublicPath(pathname)) router.push('/');
+        }
       }
 
       setIsVerifyingSession(false);

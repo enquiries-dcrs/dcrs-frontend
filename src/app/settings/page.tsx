@@ -16,13 +16,17 @@
    ChevronLeft,
    ChevronRight,
    Search,
+   KeyRound,
  } from 'lucide-react';
- import { useQuery } from '@tanstack/react-query';
+ import { useQuery, useQueryClient } from '@tanstack/react-query';
  import { api } from '@/lib/api';
 
  export default function AdminSettingsPage() {
+   const queryClient = useQueryClient();
    const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
    const [isSubmitting, setIsSubmitting] = useState(false);
+   const [resettingUserId, setResettingUserId] = useState<string | null>(null);
+   const [deactivatingUserId, setDeactivatingUserId] = useState<string | null>(null);
    const [inviteForm, setInviteForm] = useState({
      email: '',
      firstName: '',
@@ -108,23 +112,31 @@
    const homes =
      Array.isArray(apiHomes) && apiHomes.length > 0 ? apiHomes : DEFAULT_HOMES;
 
-   // Fetch existing users from the backend
-   const { data: users, isLoading: usersLoading } = useQuery({
+   // Fetch existing users from the backend (no mock list — fake “Regional Manager” rows confused sign-in debugging)
+   const {
+     data: users,
+     isLoading: usersLoading,
+     isError: usersError,
+     error: usersQueryError,
+   } = useQuery({
      queryKey: ['admin-users'],
      queryFn: async () => {
-       try {
-         const { data } = await api.get('/api/v1/admin/users');
-         return data;
-       } catch (e) {
-         // Mock data fallback so the UI looks great even before the backend is updated
-         return [
-           { id: '1', first_name: 'System', last_name: 'Admin', email: 'admin@dcrs.care', system_role: 'Regional Manager', home_scope_id: null, is_active: true },
-           { id: '2', first_name: 'Sarah', last_name: 'Jenkins', email: 'sarah@carehome.com', system_role: 'Carer', home_scope_id: '11111111-1111-1111-1111-111111111111', is_active: true },
-           { id: '3', first_name: 'Mike', last_name: 'Torres', email: 'mike@carehome.com', system_role: 'Senior Carer', home_scope_id: '22222222-2222-2222-2222-222222222222', is_active: true },
-         ];
-       }
-     }
+       const { data } = await api.get('/api/v1/admin/users');
+       return data as Array<{
+         id: string;
+         first_name: string;
+         last_name: string;
+         email: string;
+         system_role: string;
+         home_scope_id: string | null;
+         is_active: boolean;
+       }>;
+     },
    });
+   const usersErrMsg =
+     usersQueryError && typeof usersQueryError === 'object' && 'response' in usersQueryError
+       ? (usersQueryError as { response?: { data?: { error?: string } } }).response?.data?.error
+       : null;
 
    const handleInvite = async (e: React.FormEvent) => {
      e.preventDefault();
@@ -135,12 +147,70 @@
        alert('Staff member invited successfully! They will receive an email to set their password.');
        setIsInviteModalOpen(false);
        setInviteForm({ email: '', firstName: '', lastName: '', role: 'Carer', homeScopeId: 'ALL' });
+       await queryClient.invalidateQueries({ queryKey: ['admin-users'] });
      } catch (error: any) {
        console.error(error);
        alert('Note: This requires the backend endpoint to be configured first to send the Supabase invite email. (UI preview successful)');
        setIsInviteModalOpen(false);
      } finally {
        setIsSubmitting(false);
+     }
+   };
+
+   const handleDeactivateUser = async (userId: string, displayName: string) => {
+     if (
+       !window.confirm(
+         `Revoke access for ${displayName}? They will no longer be able to sign in to DCRS.`
+       )
+     ) {
+       return;
+     }
+     setDeactivatingUserId(userId);
+     try {
+       const { data } = await api.post<{ message?: string }>(
+         `/api/v1/admin/users/${userId}/deactivate`
+       );
+       alert(data?.message || 'Access revoked.');
+       await queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+       await queryClient.invalidateQueries({ queryKey: ['admin-audit-logs'] });
+     } catch (error: unknown) {
+       console.error(error);
+       const msg =
+         typeof error === 'object' &&
+         error !== null &&
+         'response' in error &&
+         typeof (error as { response?: { data?: { error?: string } } }).response?.data?.error ===
+           'string'
+           ? (error as { response: { data: { error: string } } }).response.data.error
+           : 'Could not revoke access.';
+       alert(msg);
+     } finally {
+       setDeactivatingUserId(null);
+     }
+   };
+
+   const handleResetPassword = async (userId: string) => {
+     if (!window.confirm('Send a password reset link to this user’s email?')) return;
+     setResettingUserId(userId);
+     try {
+       const { data } = await api.post<{ message?: string }>(
+         `/api/v1/admin/users/${userId}/reset-password`
+       );
+       alert(data?.message || 'Password reset link sent to their email.');
+       await queryClient.invalidateQueries({ queryKey: ['admin-audit-logs'] });
+     } catch (error: unknown) {
+       console.error(error);
+       const msg =
+         typeof error === 'object' &&
+         error !== null &&
+         'response' in error &&
+         typeof (error as { response?: { data?: { error?: string } } }).response?.data?.error ===
+           'string'
+           ? (error as { response: { data: { error: string } } }).response.data.error
+           : 'Could not send password reset. You need Regional Manager or Admin access.';
+       alert(msg);
+     } finally {
+       setResettingUserId(null);
      }
    };
 
@@ -168,7 +238,12 @@
              <h3 className="text-lg font-bold text-gray-900 flex items-center">
                <Users className="w-5 h-5 mr-2 text-blue-600" /> User Management
              </h3>
-             <p className="text-sm text-gray-500 mt-1">Manage staff access levels, roles, and home assignments.</p>
+             <p className="text-sm text-gray-500 mt-1">
+               Manage staff access levels, roles, and home assignments. The table reflects the{' '}
+               <span className="font-medium text-gray-700">DCRS database</span> (not only Supabase), so someone removed
+               from Supabase can still show as Active until you use <span className="font-medium text-gray-700">Revoke</span>.
+               After an invite, use <span className="font-medium text-gray-700">Reset password</span> if they need the email again.
+             </p>
            </div>
          </div>
          
@@ -186,6 +261,13 @@
              <tbody className="divide-y divide-gray-100">
                {usersLoading ? (
                  <tr><td colSpan={5} className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-blue-600" /></td></tr>
+               ) : usersError ? (
+                 <tr>
+                   <td colSpan={5} className="p-8 text-center text-sm text-rose-700 bg-rose-50/50">
+                     <p className="font-medium">Could not load staff directory.</p>
+                     <p className="mt-1 text-rose-600">{usersErrMsg || 'Check that you are signed in as Regional Manager or Admin.'}</p>
+                   </td>
+                 </tr>
                ) : (
                  users?.map((u: any) => {
                    const scopeName = u.home_scope_id 
@@ -197,7 +279,8 @@
                        <td className="p-4">
                          <div className="flex items-center gap-3">
                            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs shrink-0">
-                             {u.first_name[0]}{u.last_name[0]}
+                             {(u.first_name || '?')[0]}
+                             {(u.last_name || '?')[0]}
                            </div>
                            <div>
                              <div className="font-semibold text-gray-900">{u.first_name} {u.last_name}</div>
@@ -228,8 +311,50 @@
                          )}
                        </td>
                        <td className="p-4 text-right">
-                         <button className="text-blue-600 hover:text-blue-800 text-xs font-medium mr-3 transition-colors">Edit</button>
-                         <button className="text-rose-600 hover:text-rose-800 text-xs font-medium transition-colors">Revoke</button>
+                         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+                           {u.is_active ? (
+                             <button
+                               type="button"
+                               onClick={() => void handleResetPassword(String(u.id))}
+                               disabled={resettingUserId === String(u.id)}
+                               className="inline-flex items-center gap-1 text-slate-700 hover:text-slate-900 text-xs font-medium transition-colors disabled:opacity-50"
+                               title="Sends Supabase password recovery email"
+                             >
+                               {resettingUserId === String(u.id) ? (
+                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                               ) : (
+                                 <KeyRound className="w-3.5 h-3.5" />
+                               )}
+                               Reset password
+                             </button>
+                           ) : null}
+                           <button
+                             type="button"
+                             className="text-blue-600 hover:text-blue-800 text-xs font-medium transition-colors"
+                           >
+                             Edit
+                           </button>
+                           {u.is_active ? (
+                             <button
+                               type="button"
+                               onClick={() =>
+                                 void handleDeactivateUser(
+                                   String(u.id),
+                                   `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email
+                                 )
+                               }
+                               disabled={deactivatingUserId === String(u.id)}
+                               className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 text-xs font-medium transition-colors disabled:opacity-50"
+                             >
+                               {deactivatingUserId === String(u.id) ? (
+                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                               ) : null}
+                               Revoke
+                             </button>
+                           ) : (
+                             <span className="text-xs text-gray-400">Revoked</span>
+                           )}
+                         </div>
                        </td>
                      </tr>
                    );
@@ -466,7 +591,10 @@
              <div className="p-5 border-b border-gray-200 bg-slate-50 flex justify-between items-center">
                <div>
                  <h3 className="font-bold text-lg text-gray-900">Invite New Staff Member</h3>
-                 <p className="text-xs text-gray-500">They will receive an email to set their password.</p>
+                 <p className="text-xs text-gray-500">
+                   They will receive an email to set their password. If it does not arrive, use{' '}
+                   <strong>Reset password</strong> next to their name in User Management.
+                 </p>
                </div>
                <button onClick={() => setIsInviteModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
                  <X className="w-5 h-5" />

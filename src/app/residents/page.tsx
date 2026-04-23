@@ -24,12 +24,7 @@ export default function ResidentsPage() {
   const router = useRouter();
   const { data: residents, isLoading } = useResidents();
   const selectedHomeId = useGlobalStore((state) => state.selectedHomeId);
-  const user = useGlobalStore((state) => state.user);
   const [searchTerm, setSearchTerm] = useState("");
-
-  const canRegisterServiceUser =
-    user?.role &&
-    ["Regional Manager", "Home Manager", "Admin"].includes(user.role);
 
   const displayedResidents = useMemo(() => {
     const list = (residents ?? []) as ResidentRow[];
@@ -71,15 +66,13 @@ export default function ResidentsPage() {
           </h2>
           <p className="text-gray-500">Manage admitted residents and records.</p>
         </div>
-        {canRegisterServiceUser ? (
-          <button
-            type="button"
-            onClick={() => router.push("/residents/new")}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium flex items-center shadow-sm text-sm transition-colors"
-          >
-            <Plus className="w-4 h-4 mr-2" /> Admit
-          </button>
-        ) : null}
+        <button
+          type="button"
+          onClick={() => router.push("/residents/new")}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium flex items-center shadow-sm text-sm transition-colors"
+        >
+          <Plus className="w-4 h-4 mr-2" /> Admit
+        </button>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">

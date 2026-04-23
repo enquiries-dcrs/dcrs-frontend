@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useGlobalStore } from "@/store/useGlobalStore";
 import { Shield, Loader2, Lock, Mail, ChevronRight } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import { api } from "@/lib/api";
 
 // Initialize Supabase client
 // In production, these should be securely stored in your .env.local file
@@ -41,6 +42,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [resetSent, setResetSent] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,21 +67,67 @@ export default function LoginPage() {
         throw authError;
       }
 
-      if (data.user) {
-        // Success! Update global store with real user data from Supabase
-        login({
-          name: data.user.user_metadata?.full_name || "System User",
-          email: data.user.email || email,
-          role: data.user.user_metadata?.role || "Staff",
-        });
-        router.push("/dashboard");
+      if (data.user && data.session) {
+        // Postgres is source of truth for role (invite stores Regional Manager in DB, not always in JWT metadata).
+        try {
+          const { data: me } = await api.get<{
+            email: string;
+            first_name: string | null;
+            last_name: string | null;
+            system_role: string;
+          }>("/api/v1/auth/me");
+
+          const displayName =
+            `${me.first_name ?? ""} ${me.last_name ?? ""}`.trim() || me.email;
+          login({
+            name: displayName,
+            email: me.email,
+            role: me.system_role,
+          });
+          router.push("/dashboard");
+        } catch {
+          await supabase.auth.signOut();
+          setError(
+            "This Supabase account is not linked to a DCRS staff profile, or your access is inactive. Use the exact email from your invite, complete the invite link to set a password, or ask an admin to reset your access."
+          );
+        }
       }
     } catch (err: unknown) {
       console.error("Login failed:", err);
-      setError(
+      const raw =
         err instanceof Error
           ? err.message
-          : "Invalid credentials. Please try again.",
+          : "Invalid credentials. Please try again.";
+      if (/invalid login credentials|invalid email or password/i.test(raw)) {
+        setError(
+          `${raw} If you were invited recently, open the invite email and choose a password first, or use “Forgot password?” below.`
+        );
+      } else {
+        setError(raw);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    const addr = email.trim().toLowerCase();
+    if (!addr || !supabase) {
+      setError("Enter your email address above, then click Forgot password.");
+      return;
+    }
+    setError("");
+    setResetSent(false);
+    setIsLoading(true);
+    try {
+      const { error: pwErr } = await supabase.auth.resetPasswordForEmail(addr, {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      });
+      if (pwErr) throw pwErr;
+      setResetSent(true);
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error ? err.message : "Could not send reset email."
       );
     } finally {
       setIsLoading(false);
@@ -106,6 +154,11 @@ export default function LoginPage() {
           {error && (
             <div className="mb-6 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-sm rounded-lg font-medium text-center animate-in slide-in-from-top-2">
               {error}
+            </div>
+          )}
+          {resetSent && (
+            <div className="mb-6 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-lg text-center">
+              Check your inbox for a password reset link. You can close this tab after you finish in the email.
             </div>
           )}
 
@@ -140,7 +193,7 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <div className="pt-2">
+            <div className="pt-2 space-y-3">
               <button 
                 type="submit" 
                 disabled={isLoading}
@@ -154,6 +207,14 @@ export default function LoginPage() {
                     <ChevronRight className="w-4 h-4 ml-1 opacity-70 group-hover:translate-x-1 transition-transform" />
                   </>
                 )}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleForgotPassword()}
+                disabled={isLoading}
+                className="w-full text-sm font-medium text-slate-600 hover:text-blue-700 underline-offset-2 hover:underline disabled:opacity-50"
+              >
+                Forgot password? (uses email above)
               </button>
             </div>
           </form>

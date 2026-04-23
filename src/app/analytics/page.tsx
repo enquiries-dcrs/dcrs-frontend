@@ -2,44 +2,83 @@
 
 import Link from "next/link";
 import {
-  ClipboardCheck,
   Download,
   FileBarChart,
-  Pill,
   Shield,
 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
-const KPI_PERIODS = ["Last 7 days", "Last 28 days", "Quarter to date"];
-
-/** Placeholder compliance metrics until reporting API exists. */
-const MOCK_KPIS = [
-  {
-    id: "med",
-    label: "Medication round documentation",
-    value: "98.2%",
-    detail: "Within policy window",
-    icon: Pill,
-    tone: "text-emerald-700 bg-emerald-50 border-emerald-100",
-  },
-  {
-    id: "notes",
-    label: "Daily notes completed on time",
-    value: "94.0%",
-    detail: "Per care plan frequency",
-    icon: ClipboardCheck,
-    tone: "text-blue-700 bg-blue-50 border-blue-100",
-  },
-  {
-    id: "inc",
-    label: "Incidents logged ≤ 24h",
-    value: "100%",
-    detail: "Regulatory target",
-    icon: Shield,
-    tone: "text-violet-700 bg-violet-50 border-violet-100",
-  },
+const KPI_PERIODS = [
+  { label: "Last 7 days", value: "7d" },
+  { label: "Last 28 days", value: "28d" },
+  { label: "Quarter to date", value: "qtd" },
 ];
 
 export default function AnalyticsPage() {
+  const [period, setPeriod] = useState<(typeof KPI_PERIODS)[number]["value"]>("7d");
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["analytics-summary", period],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/analytics/summary?period=${encodeURIComponent(period)}`);
+      return data as {
+        period: { label: string; from: string; to: string };
+        notesCreated: number;
+        residents: { admitted: number; discharged: number; pending: number };
+        audit: { total: number; ai_actions: number; non_success: number };
+        topActions: Array<{ action: string; count: number }>;
+      };
+    },
+    staleTime: 30_000,
+  });
+
+  const kpis = useMemo(() => {
+    const notesCreated = data?.notesCreated ?? 0;
+    const aiActions = data?.audit?.ai_actions ?? 0;
+    const auditTotal = data?.audit?.total ?? 0;
+    const auditNonSuccess = data?.audit?.non_success ?? 0;
+    const admitted = data?.residents?.admitted ?? 0;
+
+    return [
+      {
+        id: "notes",
+        label: "Clinical notes created",
+        value: String(notesCreated),
+        detail: data?.period?.label ? `During ${data.period.label.toLowerCase()}` : "Selected period",
+        icon: Shield,
+        tone: "text-blue-700 bg-blue-50 border-blue-100",
+      },
+      {
+        id: "ai",
+        label: "AI actions (governance log)",
+        value: String(aiActions),
+        detail: auditTotal ? `${aiActions} of ${auditTotal} audit rows` : "Selected period",
+        icon: Shield,
+        tone: "text-violet-700 bg-violet-50 border-violet-100",
+      },
+      {
+        id: "risk",
+        label: "Non-success audit events",
+        value: String(auditNonSuccess),
+        detail: admitted ? `Current admitted residents: ${admitted}` : "Across the estate",
+        icon: Shield,
+        tone: "text-amber-800 bg-amber-50 border-amber-100",
+      },
+    ];
+  }, [data]);
+
+  const exportAuditCsv = async () => {
+    const params = new URLSearchParams();
+    if (data?.period?.from) params.set("from", data.period.from);
+    if (data?.period?.to) params.set("to", data.period.to);
+    const url = `${process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:4000"}/api/v1/admin/audit-logs/export.csv?${params.toString()}`;
+
+    // Use a direct navigation download so cookies/auth headers are handled by the browser.
+    window.location.assign(url);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -52,20 +91,25 @@ export default function AnalyticsPage() {
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm text-zinc-700">
             <span className="sr-only">Reporting period</span>
-            <select className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:ring-2 focus:ring-blue-500">
+            <select
+              value={period}
+              onChange={(e) => setPeriod(e.target.value as (typeof KPI_PERIODS)[number]["value"])}
+              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none focus:ring-2 focus:ring-blue-500"
+            >
               {KPI_PERIODS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
+                <option key={p.value} value={p.value}>
+                  {p.label}
                 </option>
               ))}
             </select>
           </label>
           <button
             type="button"
+            onClick={() => void exportAuditCsv()}
             className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50"
           >
             <Download className="h-4 w-4" aria-hidden />
-            Export CSV
+            Export audit CSV
           </button>
         </div>
       </div>
@@ -86,7 +130,7 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        {MOCK_KPIS.map((k) => (
+        {kpis.map((k) => (
           <div
             key={k.id}
             className={`rounded-xl border p-4 shadow-sm ${k.tone}`}
@@ -95,9 +139,11 @@ export default function AnalyticsPage() {
               <div>
                 <p className="text-sm font-medium opacity-90">{k.label}</p>
                 <p className="mt-2 text-3xl font-bold tracking-tight">
-                  {k.value}
+                  {isLoading ? "—" : k.value}
                 </p>
-                <p className="mt-1 text-xs opacity-80">{k.detail}</p>
+                <p className="mt-1 text-xs opacity-80">
+                  {isError ? "Unable to load reporting data." : k.detail}
+                </p>
               </div>
               <k.icon className="h-8 w-8 shrink-0 opacity-80" aria-hidden />
             </div>
@@ -124,7 +170,7 @@ export default function AnalyticsPage() {
         <div className="border-b border-zinc-200 px-4 py-3">
           <h2 className="font-semibold text-zinc-900">Audit-ready extracts</h2>
           <p className="text-xs text-zinc-500">
-            Immutable logs and sign-offs for inspections (mock list).
+            Immutable logs and sign-offs for inspections.
           </p>
         </div>
         <ul className="divide-y divide-zinc-100 text-sm">

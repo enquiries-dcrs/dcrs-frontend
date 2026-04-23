@@ -13,9 +13,6 @@ const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supa
 
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000',
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 // Request Interceptor: The "VIP Pass"
@@ -43,6 +40,18 @@ api.interceptors.request.use(
       } catch (err) {
         console.error('Critical failure retrieving session in interceptor:', err);
       }
+    }
+    // FormData needs multipart boundary; do not force application/json.
+    if (config.data instanceof FormData) {
+      delete (config.headers as Record<string, unknown>)['Content-Type'];
+    } else if (
+      config.data !== undefined &&
+      config.data !== null &&
+      typeof config.data === 'object' &&
+      !(config.data instanceof URLSearchParams)
+    ) {
+      (config.headers as Record<string, string>)['Content-Type'] =
+        (config.headers as Record<string, string>)['Content-Type'] || 'application/json';
     }
     return config;
   },

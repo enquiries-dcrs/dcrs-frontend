@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useResident } from '@/hooks/useResident';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,6 +12,175 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
+
+function todayIsoDate(): string {
+  // Use local date; chart_date is stored as a DATE.
+  const d = new Date();
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const [chartDate, setChartDate] = useState<string>(todayIsoDate());
+  const [entryType, setEntryType] = useState<'FOOD' | 'DRINK'>('DRINK');
+  const [description, setDescription] = useState('');
+  const [amountMl, setAmountMl] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['food-drink', residentId, chartDate],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/food-drink`, {
+        params: { date: chartDate },
+      });
+      return data as { entries: any[] };
+    },
+  });
+
+  const entries = data?.entries || [];
+
+  const totalMl = entries.reduce((sum: number, e: any) => {
+    const n = typeof e.amount_ml === 'number' ? e.amount_ml : Number(e.amount_ml);
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+
+  const submit = async () => {
+    const desc = description.trim();
+    if (!desc) return;
+    setSaving(true);
+    try {
+      await api.post(`/api/v1/residents/${residentId}/food-drink`, {
+        entryType,
+        description: desc,
+        amountMl: amountMl.trim() === '' ? null : Number(amountMl),
+        date: chartDate,
+      });
+      setDescription('');
+      setAmountMl('');
+      await queryClient.invalidateQueries({ queryKey: ['food-drink', residentId, chartDate] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not add entry. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-4 border-b border-gray-200 bg-slate-50 flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-gray-600">Date</label>
+            <input
+              type="date"
+              value={chartDate}
+              onChange={(e) => setChartDate(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div className="sm:ml-auto flex items-center gap-2 text-sm">
+            <span className="text-gray-600">Total drinks:</span>
+            <span className="font-semibold text-gray-900">{totalMl} ml</span>
+          </div>
+        </div>
+
+        {!isReadOnly && (
+          <div className="p-4 border-b border-gray-200 grid grid-cols-1 md:grid-cols-6 gap-3">
+            <div className="md:col-span-1">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Type</label>
+              <select
+                value={entryType}
+                onChange={(e) => setEntryType(e.target.value === 'FOOD' ? 'FOOD' : 'DRINK')}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="DRINK">Drink</option>
+                <option value="FOOD">Food</option>
+              </select>
+            </div>
+            <div className="md:col-span-4">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Description</label>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder={entryType === 'DRINK' ? 'E.g. Water' : 'E.g. Ate 3/4 lunch'}
+              />
+            </div>
+            <div className="md:col-span-1">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Amount (ml)</label>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                value={amountMl}
+                onChange={(e) => setAmountMl(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Optional"
+                disabled={entryType === 'FOOD'}
+              />
+            </div>
+            <div className="md:col-span-6 flex justify-end">
+              <button
+                type="button"
+                onClick={submit}
+                disabled={saving || !description.trim()}
+                className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                Add entry
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="divide-y divide-gray-100">
+          {isLoading ? (
+            <div className="p-8 text-center text-gray-500">Loading chart…</div>
+          ) : error ? (
+            <div className="p-8 text-center text-rose-600">Could not load chart.</div>
+          ) : entries.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">No entries for this day.</div>
+          ) : (
+            entries.map((e: any) => (
+              <div key={e.id} className="p-4 flex items-start gap-4">
+                <div className="mt-0.5 shrink-0">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      e.entry_type === 'DRINK'
+                        ? 'bg-sky-100 text-sky-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    {e.entry_type === 'DRINK' ? 'Drink' : 'Food'}
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <p className="text-sm font-medium text-gray-900 break-words">{e.description}</p>
+                    {e.amount_ml != null && e.amount_ml !== '' ? (
+                      <span className="text-xs font-semibold text-gray-700 bg-slate-100 border border-slate-200 rounded px-2 py-0.5">
+                        {e.amount_ml} ml
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {e.recorded_by ? `By ${e.recorded_by} • ` : null}
+                    {e.created_at ? new Date(e.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function ResidentProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = React.use(params);
@@ -26,9 +195,12 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     ['Regional Manager', 'Home Manager', 'Admin'].includes(user.role as string);
 
   const [isProfilePhotoModalOpen, setIsProfilePhotoModalOpen] = useState(false);
-  const [profilePhotoDraft, setProfilePhotoDraft] = useState('');
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
+  const [profilePhotoPreviewUrl, setProfilePhotoPreviewUrl] = useState<string | null>(null);
   const [profilePhotoSaving, setProfilePhotoSaving] = useState(false);
   const [headerPhotoFailed, setHeaderPhotoFailed] = useState(false);
+  const profilePhotoCameraInputRef = useRef<HTMLInputElement>(null);
+  const profilePhotoGalleryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setHeaderPhotoFailed(false);
@@ -91,7 +263,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   }
 
   const isReadOnly = resident.status === 'ARCHIVED';
-  const tabs = ['Overview', 'Tasks', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
+  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
@@ -225,19 +397,46 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     resetFn();
   };
 
+  const revokeProfilePhotoPreview = () => {
+    setProfilePhotoPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setProfilePhotoFile(null);
+  };
+
+  const closeProfilePhotoModal = () => {
+    revokeProfilePhotoPreview();
+    setIsProfilePhotoModalOpen(false);
+  };
+
   const openProfilePhotoModal = () => {
-    setProfilePhotoDraft(resident.profile_image_url || '');
+    revokeProfilePhotoPreview();
     setIsProfilePhotoModalOpen(true);
   };
 
+  const onProfilePhotoFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setProfilePhotoFile(f);
+    setProfilePhotoPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(f);
+    });
+  };
+
   const handleSaveProfilePhoto = async () => {
+    if (!profilePhotoFile) {
+      alert('Take a new photo or choose one from your device first.');
+      return;
+    }
     setProfilePhotoSaving(true);
     try {
-      const trimmed = profilePhotoDraft.trim();
-      await api.patch(`/api/v1/residents/${resident.id}`, {
-        profileImageUrl: trimmed === '' ? null : trimmed,
-      });
-      setIsProfilePhotoModalOpen(false);
+      const fd = new FormData();
+      fd.append('photo', profilePhotoFile);
+      await api.post(`/api/v1/residents/${resident.id}/profile-photo`, fd);
+      closeProfilePhotoModal();
       await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
       await queryClient.invalidateQueries({ queryKey: ['residents'] });
     } catch (e) {
@@ -248,8 +447,25 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
         'response' in e &&
         typeof (e as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
           ? (e as { response: { data: { error: string } } }).response.data.error
-          : 'Could not save profile photo URL. It must start with http:// or https://';
+          : 'Could not upload profile photo. Check the image is JPEG, PNG, or WebP and under 5MB.';
       alert(msg);
+    } finally {
+      setProfilePhotoSaving(false);
+    }
+  };
+
+  const handleRemoveProfilePhoto = async () => {
+    if (!resident.profile_image_url) return;
+    if (!window.confirm('Remove the profile photo from this service user?')) return;
+    setProfilePhotoSaving(true);
+    try {
+      await api.patch(`/api/v1/residents/${resident.id}`, { profileImageUrl: null });
+      closeProfilePhotoModal();
+      await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+      await queryClient.invalidateQueries({ queryKey: ['residents'] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not remove profile photo.');
     } finally {
       setProfilePhotoSaving(false);
     }
@@ -466,7 +682,18 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                 />
                 <div className="flex gap-2">
                   <button 
-                    onClick={() => handleGenericSubmit('Task', () => setNewTaskTitle(''))} 
+                    onClick={async () => {
+                      const title = newTaskTitle.trim();
+                      if (!title) return;
+                      try {
+                        await api.post(`/api/v1/residents/${resident.id}/tasks`, { title });
+                        setNewTaskTitle('');
+                        await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+                      } catch (e) {
+                        console.error(e);
+                        alert('Could not add task. Please try again.');
+                      }
+                    }} 
                     disabled={!newTaskTitle.trim()} 
                     className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center"
                   >
@@ -487,18 +714,42 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                 <div className="p-8 text-center text-gray-500">No active tasks.</div>
               ) : (resident.tasks || []).map((task: any) => (
                 <div key={task.id} className="p-4 flex items-center gap-4 hover:bg-slate-50 transition-colors">
-                  <button className={`w-6 h-6 rounded border flex items-center justify-center shrink-0 ${task.status === 'Completed' ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 bg-white'}`}>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const nextStatus = task.status === 'Completed' ? 'Open' : 'Completed';
+                        await api.patch(`/api/v1/residents/${resident.id}/tasks/${task.id}`, { status: nextStatus });
+                        await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+                      } catch (e) {
+                        console.error(e);
+                        alert('Could not update task. Please try again.');
+                      }
+                    }}
+                    className={`w-6 h-6 rounded border flex items-center justify-center shrink-0 ${task.status === 'Completed' ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 bg-white'}`}
+                    title={task.status === 'Completed' ? 'Mark as open' : 'Mark as completed'}
+                  >
                     {task.status === 'Completed' && <CheckCircle2 className="w-4 h-4" />}
                   </button>
                   <div className="flex-1">
                     <p className={`text-sm font-medium ${task.status === 'Completed' ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{task.title}</p>
-                    <p className="text-xs text-gray-500 mt-1">Due: {task.dueDate} • <span className={task.priority === 'High' ? 'text-rose-600 font-semibold' : ''}>{task.priority} Priority</span></p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Due: {task.dueDate || '—'} •{' '}
+                      <span className={task.priority === 'High' ? 'text-rose-600 font-semibold' : ''}>
+                        {task.priority} Priority
+                      </span>
+                    </p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
         </div>
+      )}
+
+      {/* --- TAB: FOOD & DRINK --- */}
+      {activeTab === 'Food & Drink' && (
+        <FoodAndDrinkTab residentId={resident.id} isReadOnly={isReadOnly} />
       )}
 
       {/* --- TAB: NOTES & INCIDENTS --- */}
@@ -851,15 +1102,30 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
         </div>
       )}
 
-      {/* Profile photo URL (managers) */}
+      {/* Profile photo upload (camera / gallery, managers) */}
       {isProfilePhotoModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <input
+            ref={profilePhotoCameraInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/*"
+            capture="environment"
+            className="hidden"
+            onChange={onProfilePhotoFileSelected}
+          />
+          <input
+            ref={profilePhotoGalleryInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/*"
+            className="hidden"
+            onChange={onProfilePhotoFileSelected}
+          />
           <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between border-b border-gray-200 bg-slate-50 p-5">
               <h3 className="text-lg font-bold text-gray-900">Profile photo</h3>
               <button
                 type="button"
-                onClick={() => setIsProfilePhotoModalOpen(false)}
+                onClick={closeProfilePhotoModal}
                 className="text-gray-400 transition-colors hover:text-gray-600"
               >
                 <X className="h-5 w-5" />
@@ -867,52 +1133,76 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
             </div>
             <div className="space-y-4 p-5">
               <p className="text-sm text-gray-600">
-                Paste a direct <strong>https</strong> (or http) link to a photo. It appears on this chart and in the
-                service user list so staff can recognise them quickly.
+                Take a photo with the device camera or pick an image from this device. The photo appears on this chart
+                and in the service user list (JPEG, PNG, or WebP, up to 5MB).
               </p>
-              <div>
-                <label className="mb-1 block text-xs font-semibold text-gray-600">Image URL</label>
-                <input
-                  type="url"
-                  value={profilePhotoDraft}
-                  onChange={(e) => setProfilePhotoDraft(e.target.value)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="https://…"
-                  autoComplete="off"
-                />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => profilePhotoCameraInputRef.current?.click()}
+                  className="inline-flex flex-1 min-w-[8rem] items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+                >
+                  <Camera className="h-4 w-4 shrink-0" />
+                  Take photo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => profilePhotoGalleryInputRef.current?.click()}
+                  className="inline-flex flex-1 min-w-[8rem] items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                >
+                  <FileUp className="h-4 w-4 shrink-0" />
+                  From gallery
+                </button>
               </div>
-              {profilePhotoDraft.trim().match(/^https?:\/\//i) ? (
-                <div className="flex justify-center rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <img
-                    src={profilePhotoDraft.trim()}
-                    alt="Preview"
-                    className="max-h-36 max-w-full rounded-lg object-contain shadow-sm"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
+              {(profilePhotoPreviewUrl || resident.profile_image_url) && (
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-gray-500">
+                    {profilePhotoPreviewUrl ? 'New photo preview' : 'Current photo'}
+                  </p>
+                  <div className="flex justify-center rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <img
+                      src={profilePhotoPreviewUrl || resident.profile_image_url || ''}
+                      alt="Profile preview"
+                      className="max-h-40 max-w-full rounded-lg object-contain shadow-sm"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                  </div>
                 </div>
-              ) : null}
+              )}
             </div>
-            <div className="flex justify-end gap-3 border-t border-gray-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap justify-end gap-3 border-t border-gray-200 bg-slate-50 p-4">
+              {resident.profile_image_url ? (
+                <button
+                  type="button"
+                  onClick={handleRemoveProfilePhoto}
+                  disabled={profilePhotoSaving}
+                  className="mr-auto rounded-lg border border-rose-200 bg-white px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  Remove photo
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={() => setProfilePhotoDraft('')}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                onClick={revokeProfilePhotoPreview}
+                disabled={!profilePhotoFile || profilePhotoSaving}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
-                Clear URL
+                Clear selection
               </button>
               <button
                 type="button"
-                onClick={() => setIsProfilePhotoModalOpen(false)}
-                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                onClick={closeProfilePhotoModal}
+                disabled={profilePhotoSaving}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleSaveProfilePhoto}
-                disabled={profilePhotoSaving}
+                disabled={profilePhotoSaving || !profilePhotoFile}
                 className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {profilePhotoSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
