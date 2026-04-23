@@ -225,6 +225,146 @@ function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isRea
   );
 }
 
+function ActivitiesTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const [chartDate, setChartDate] = useState<string>(todayIsoDate());
+  const activityOptions = [
+    'Exercise class',
+    'Arts and Crafts',
+    'Puzzles',
+    'Watched television',
+    'Movie matinee',
+    'Gardening',
+    'Sitting in the garden',
+    'Pampering session',
+    'Bingo',
+    'Seasonal crafts',
+    'Reading',
+    'Social outings',
+    'Visitors',
+    'Dominoes',
+  ] as const;
+  const [activityType, setActivityType] = useState<(typeof activityOptions)[number]>(activityOptions[0]);
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['activities', residentId, chartDate],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/activities`, {
+        params: { date: chartDate },
+      });
+      return data as { entries: any[] };
+    },
+  });
+
+  const entries = data?.entries || [];
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await api.post(`/api/v1/residents/${residentId}/activities`, {
+        activityType,
+        notes: notes.trim() || null,
+        date: chartDate,
+      });
+      setNotes('');
+      await queryClient.invalidateQueries({ queryKey: ['activities', residentId, chartDate] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not add activity entry. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-4 border-b border-gray-200 bg-slate-50 flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-gray-600">Date</label>
+            <input
+              type="date"
+              value={chartDate}
+              onChange={(e) => setChartDate(e.target.value)}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div className="sm:ml-auto text-xs text-gray-500">{entries.length} entr{entries.length === 1 ? 'y' : 'ies'}</div>
+        </div>
+
+        {!isReadOnly && (
+          <div className="p-4 border-b border-gray-200 grid grid-cols-1 md:grid-cols-6 gap-3">
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Activity</label>
+              <select
+                value={activityType}
+                onChange={(e) => setActivityType(e.target.value as any)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {activityOptions.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-4">
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Notes (optional)</label>
+              <input
+                type="text"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="E.g. Joined group, engaged well"
+              />
+            </div>
+            <div className="md:col-span-6 flex justify-end">
+              <button
+                type="button"
+                onClick={submit}
+                disabled={saving}
+                className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                Add activity
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="divide-y divide-gray-100">
+          {isLoading ? (
+            <div className="p-8 text-center text-gray-500">Loading chart…</div>
+          ) : error ? (
+            <div className="p-8 text-center text-rose-600">Could not load chart.</div>
+          ) : entries.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">No entries for this day.</div>
+          ) : (
+            entries.map((e: any) => (
+              <div key={e.id} className="p-4 flex items-start gap-4">
+                <div className="mt-0.5 shrink-0">
+                  <span className="inline-flex items-center rounded-full bg-indigo-100 text-indigo-800 px-2.5 py-1 text-xs font-semibold">
+                    {e.activity_type}
+                  </span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  {e.notes ? <p className="text-sm text-gray-900 break-words">{e.notes}</p> : <p className="text-sm text-gray-500">No notes</p>}
+                  <p className="mt-1 text-xs text-gray-500">
+                    {e.recorded_by ? `By ${e.recorded_by} • ` : null}
+                    {e.created_at ? new Date(e.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ResidentProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = React.use(params);
   const router = useRouter();
@@ -306,7 +446,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   }
 
   const isReadOnly = resident.status === 'ARCHIVED';
-  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
+  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Activities', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
@@ -793,6 +933,11 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       {/* --- TAB: FOOD & DRINK --- */}
       {activeTab === 'Food & Drink' && (
         <FoodAndDrinkTab residentId={resident.id} isReadOnly={isReadOnly} />
+      )}
+
+      {/* --- TAB: ACTIVITIES --- */}
+      {activeTab === 'Activities' && (
+        <ActivitiesTab residentId={resident.id} isReadOnly={isReadOnly} />
       )}
 
       {/* --- TAB: NOTES & INCIDENTS --- */}
