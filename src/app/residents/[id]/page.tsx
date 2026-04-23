@@ -540,6 +540,239 @@ function DailyCareTab({ residentId, isReadOnly }: { residentId: string; isReadOn
   );
 }
 
+function PeepTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const canEdit = useGlobalStore((s) => {
+    const role = s.user?.role as string | undefined;
+    return Boolean(role) && ['Home Manager', 'Regional Manager', 'Admin'].includes(role);
+  });
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['peep', residentId],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/peep`);
+      return data as { peep: any | null };
+    },
+  });
+
+  const [form, setForm] = useState({
+    mobility: '',
+    assistanceRequired: '',
+    evacuationMethod: '',
+    alarmAwareness: '',
+    communicationNeeds: '',
+    nightArrangements: '',
+    equipmentRequired: '',
+    keyRisks: '',
+    routeAndRefuge: '',
+    otherNotes: '',
+    reviewDate: '',
+  });
+
+  useEffect(() => {
+    const p = data?.peep;
+    if (!p) return;
+    setForm({
+      mobility: p.mobility || '',
+      assistanceRequired: p.assistance_required || '',
+      evacuationMethod: p.evacuation_method || '',
+      alarmAwareness: p.alarm_awareness || '',
+      communicationNeeds: p.communication_needs || '',
+      nightArrangements: p.night_arrangements || '',
+      equipmentRequired: p.equipment_required || '',
+      keyRisks: p.key_risks || '',
+      routeAndRefuge: p.route_and_refuge || '',
+      otherNotes: p.other_notes || '',
+      reviewDate: p.review_date || '',
+    });
+  }, [data?.peep]);
+
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    if (!canEdit) return;
+    setSaving(true);
+    try {
+      await api.put(`/api/v1/residents/${residentId}/peep`, {
+        mobility: form.mobility,
+        assistanceRequired: form.assistanceRequired,
+        evacuationMethod: form.evacuationMethod,
+        alarmAwareness: form.alarmAwareness,
+        communicationNeeds: form.communicationNeeds,
+        nightArrangements: form.nightArrangements,
+        equipmentRequired: form.equipmentRequired,
+        keyRisks: form.keyRisks,
+        routeAndRefuge: form.routeAndRefuge,
+        otherNotes: form.otherNotes,
+        reviewDate: form.reviewDate || null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['peep', residentId] });
+      alert('PEEP saved.');
+    } catch (e) {
+      console.error(e);
+      alert('Could not save PEEP. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const Field = ({
+    label,
+    value,
+    onChange,
+    rows = 3,
+    placeholder,
+  }: {
+    label: string;
+    value: string;
+    onChange: (v: string) => void;
+    rows?: number;
+    placeholder?: string;
+  }) => (
+    <div>
+      <label className="mb-1 block text-xs font-semibold text-gray-600">{label}</label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={rows}
+        placeholder={placeholder}
+        disabled={isReadOnly || !canEdit}
+        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+      />
+    </div>
+  );
+
+  return (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-5 border-b border-gray-200 bg-slate-50 flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">PEEP (Personal Emergency Evacuation Plan)</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              Standard evacuation plan for this resident. {canEdit ? 'Managers can edit.' : 'Read-only.'}
+            </p>
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Print
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={!canEdit || isReadOnly || saving}
+              className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Save
+            </button>
+          </div>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {isLoading ? (
+            <div className="p-6 text-center text-gray-500">Loading PEEP…</div>
+          ) : error ? (
+            <div className="p-6 text-center text-rose-600">Could not load PEEP.</div>
+          ) : null}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <Field
+              label="Mobility"
+              value={form.mobility}
+              onChange={(v) => setForm((p) => ({ ...p, mobility: v }))}
+              placeholder="E.g. Independent with walking frame; cannot manage stairs"
+            />
+            <Field
+              label="Assistance required"
+              value={form.assistanceRequired}
+              onChange={(v) => setForm((p) => ({ ...p, assistanceRequired: v }))}
+              placeholder="E.g. 2 staff assist for evacuation"
+            />
+            <Field
+              label="Evacuation method"
+              value={form.evacuationMethod}
+              onChange={(v) => setForm((p) => ({ ...p, evacuationMethod: v }))}
+              placeholder="E.g. Assisted walk / wheelchair / evac chair"
+            />
+            <Field
+              label="Alarm awareness"
+              value={form.alarmAwareness}
+              onChange={(v) => setForm((p) => ({ ...p, alarmAwareness: v }))}
+              placeholder="E.g. Hard of hearing; needs visual/verbal prompt"
+            />
+            <Field
+              label="Communication needs"
+              value={form.communicationNeeds}
+              onChange={(v) => setForm((p) => ({ ...p, communicationNeeds: v }))}
+              placeholder="E.g. Simple instructions; anxiety reassurance"
+            />
+            <Field
+              label="Night arrangements"
+              value={form.nightArrangements}
+              onChange={(v) => setForm((p) => ({ ...p, nightArrangements: v }))}
+              placeholder="E.g. Bedroom location; sensor mats; night staff aware"
+            />
+            <Field
+              label="Equipment required"
+              value={form.equipmentRequired}
+              onChange={(v) => setForm((p) => ({ ...p, equipmentRequired: v }))}
+              placeholder="E.g. Wheelchair; oxygen; evacuation sheet"
+            />
+            <Field
+              label="Key risks"
+              value={form.keyRisks}
+              onChange={(v) => setForm((p) => ({ ...p, keyRisks: v }))}
+              placeholder="E.g. Confusion, falls risk, oxygen dependency"
+              rows={4}
+            />
+          </div>
+
+          <Field
+            label="Route / refuge points"
+            value={form.routeAndRefuge}
+            onChange={(v) => setForm((p) => ({ ...p, routeAndRefuge: v }))}
+            placeholder="E.g. Preferred route from room; refuge point if needed"
+            rows={4}
+          />
+
+          <Field
+            label="Other notes"
+            value={form.otherNotes}
+            onChange={(v) => setForm((p) => ({ ...p, otherNotes: v }))}
+            rows={4}
+          />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-gray-600">Review date</label>
+              <input
+                type="date"
+                value={form.reviewDate}
+                onChange={(e) => setForm((p) => ({ ...p, reviewDate: e.target.value }))}
+                disabled={isReadOnly || !canEdit}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+              />
+            </div>
+            <div className="text-xs text-gray-500 flex items-end">
+              {data?.peep?.updated_at ? (
+                <div>
+                  Last updated: {new Date(data.peep.updated_at).toLocaleString()} {data.peep.updated_by ? `by ${data.peep.updated_by}` : ''}
+                </div>
+              ) : (
+                <div>No PEEP saved yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ResidentProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = React.use(params);
   const router = useRouter();
@@ -621,7 +854,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   }
 
   const isReadOnly = resident.status === 'ARCHIVED';
-  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
+  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
@@ -1118,6 +1351,11 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       {/* --- TAB: DAILY CARE --- */}
       {activeTab === 'Daily care' && (
         <DailyCareTab residentId={resident.id} isReadOnly={isReadOnly} />
+      )}
+
+      {/* --- TAB: PEEP --- */}
+      {activeTab === 'PEEP' && (
+        <PeepTab residentId={resident.id} isReadOnly={isReadOnly} />
       )}
 
       {/* --- TAB: NOTES & INCIDENTS --- */}
