@@ -57,6 +57,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       } else if (!isAuthenticated && session) {
         try {
           const { data: me } = await api.get<{
+            id?: string;
             email: string;
             first_name: string | null;
             last_name: string | null;
@@ -65,6 +66,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           const displayName =
             `${me.first_name ?? ''} ${me.last_name ?? ''}`.trim() || me.email;
           login({
+            id: me.id,
             name: displayName,
             email: me.email,
             role: me.system_role,

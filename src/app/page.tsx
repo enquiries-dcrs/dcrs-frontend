@@ -71,6 +71,7 @@ export default function LoginPage() {
         // Postgres is source of truth for role (invite stores Regional Manager in DB, not always in JWT metadata).
         try {
           const { data: me } = await api.get<{
+            id?: string;
             email: string;
             first_name: string | null;
             last_name: string | null;
@@ -80,6 +81,7 @@ export default function LoginPage() {
           const displayName =
             `${me.first_name ?? ""} ${me.last_name ?? ""}`.trim() || me.email;
           login({
+            id: me.id,
             name: displayName,
             email: me.email,
             role: me.system_role,

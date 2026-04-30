@@ -2,12 +2,12 @@ import { create } from 'zustand';
 
 interface GlobalState {
   isAuthenticated: boolean;
-  user: { name: string; email: string; role: string } | null;
+  user: { id?: string; name: string; email: string; role: string } | null;
   selectedHomeId: string;
   appMode: 'clinical' | 'family';
   isGlobalSearchOpen: boolean;
   
-  login: (userData: { name: string; email: string; role: string }) => void;
+  login: (userData: { id?: string; name: string; email: string; role: string }) => void;
   logout: () => void;
   setSelectedHomeId: (id: string) => void;
   setAppMode: (mode: 'clinical' | 'family') => void;

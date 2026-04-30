@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useResident } from '@/hooks/useResident';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -20,6 +20,46 @@ function todayIsoDate(): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function taskPriorityIsHighClient(p: string | undefined): boolean {
+  const s = String(p || '').trim().toLowerCase();
+  return s === 'high' || s === 'critical';
+}
+
+function isTaskOverdue(task: { dueDateIso?: string | null; status?: string }): boolean {
+  const st = String(task.status || '').toLowerCase();
+  if (st === 'completed' || st === 'done') return false;
+  if (!task.dueDateIso) return false;
+  return task.dueDateIso < todayIsoDate();
+}
+
+function isTaskDueToday(task: { dueDateIso?: string | null; status?: string }): boolean {
+  const st = String(task.status || '').toLowerCase();
+  if (st === 'completed' || st === 'done') return false;
+  if (!task.dueDateIso) return false;
+  return task.dueDateIso === todayIsoDate();
+}
+
+const TASK_ASSIGN_ROLES = new Set([
+  'Senior Carer',
+  'Deputy Manager',
+  'Home Manager',
+  'Regional Manager',
+  'Admin',
+]);
+
+function taskPriorityToSelectKey(p: string | undefined): string {
+  const s = String(p || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_');
+  if (s === 'LOW' || s === 'NORMAL' || s === 'HIGH' || s === 'CRITICAL') return s;
+  const t = String(p || '').trim().toLowerCase();
+  if (t === 'low') return 'LOW';
+  if (t === 'high') return 'HIGH';
+  if (t === 'critical') return 'CRITICAL';
+  return 'NORMAL';
 }
 
 function FoodAndDrinkTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: boolean }) {
@@ -1999,6 +2039,14 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
 
   // --- Tasks Tab State ---
   const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDue, setNewTaskDue] = useState('');
+  const [newTaskPriority, setNewTaskPriority] = useState('NORMAL');
+  const [taskListFilter, setTaskListFilter] = useState<'all' | 'overdue' | 'dueToday' | 'highPriority'>('all');
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editDue, setEditDue] = useState('');
+  const [editPriority, setEditPriority] = useState('NORMAL');
+  const [savingTaskId, setSavingTaskId] = useState<string | null>(null);
+  const [assigningTaskId, setAssigningTaskId] = useState<string | null>(null);
   const [isGeneratingTasks, setIsGeneratingTasks] = useState(false);
 
   // --- Notes & Incidents Tab State ---
@@ -2027,6 +2075,14 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     }
   });
 
+  const filteredTasks = useMemo(() => {
+    const list = [...(resident?.tasks || [])];
+    if (taskListFilter === 'overdue') return list.filter((t: any) => isTaskOverdue(t));
+    if (taskListFilter === 'dueToday') return list.filter((t: any) => isTaskDueToday(t));
+    if (taskListFilter === 'highPriority') return list.filter((t: any) => taskPriorityIsHighClient(t.priority));
+    return list;
+  }, [resident?.tasks, taskListFilter]);
+
   if (isLoading) {
     return (
       <div className="flex h-[60vh] items-center justify-center flex-col space-y-4 animate-in fade-in">
@@ -2041,6 +2097,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   }
 
   const isReadOnly = resident.status === 'ARCHIVED';
+  const canAssignTasks = Boolean(user?.role) && TASK_ASSIGN_ROLES.has(user.role as string);
   const tabs = ['Overview', 'Care plan', 'Assessments', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
@@ -2520,76 +2577,307 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
         <div className="space-y-6 animate-in fade-in">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             {!isReadOnly && (
-              <div className="p-4 border-b border-gray-200 bg-slate-50 flex flex-col sm:flex-row gap-3">
-                <input 
-                  type="text" 
-                  value={newTaskTitle} 
-                  onChange={e => setNewTaskTitle(e.target.value)} 
-                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500" 
-                  placeholder="E.g. Prepare for hospital discharge..." 
-                />
-                <div className="flex gap-2">
-                  <button 
+              <div className="p-4 border-b border-gray-200 bg-slate-50 flex flex-col gap-3">
+                <div className="flex flex-col lg:flex-row gap-3">
+                  <input
+                    type="text"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="E.g. Prepare for hospital discharge..."
+                  />
+                  <input
+                    type="date"
+                    value={newTaskDue}
+                    onChange={(e) => setNewTaskDue(e.target.value)}
+                    className="w-full lg:w-44 border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    title="Due date"
+                  />
+                  <select
+                    value={newTaskPriority}
+                    onChange={(e) => setNewTaskPriority(e.target.value)}
+                    className="w-full lg:w-40 border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    title="Priority"
+                  >
+                    <option value="LOW">Low</option>
+                    <option value="NORMAL">Normal</option>
+                    <option value="HIGH">High</option>
+                    <option value="CRITICAL">Critical</option>
+                  </select>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
                     onClick={async () => {
                       const title = newTaskTitle.trim();
                       if (!title) return;
                       try {
-                        await api.post(`/api/v1/residents/${resident.id}/tasks`, { title });
+                        await api.post(`/api/v1/residents/${resident.id}/tasks`, {
+                          title,
+                          priority: newTaskPriority,
+                          ...(newTaskDue ? { dueDate: newTaskDue } : {}),
+                        });
                         setNewTaskTitle('');
+                        setNewTaskDue('');
+                        setNewTaskPriority('NORMAL');
                         await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
                       } catch (e) {
                         console.error(e);
-                        alert('Could not add task. Please try again.');
+                        const msg =
+                          typeof e === 'object' &&
+                          e !== null &&
+                          'response' in e &&
+                          typeof (e as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+                            ? (e as { response: { data: { error: string } } }).response.data.error
+                            : 'Could not add task. Please try again.';
+                        alert(msg);
                       }
-                    }} 
-                    disabled={!newTaskTitle.trim()} 
+                    }}
+                    disabled={!newTaskTitle.trim()}
                     className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center"
                   >
                     <Plus className="w-4 h-4 mr-2" /> Add Task
                   </button>
-                  <button 
-                    onClick={() => { setIsGeneratingTasks(true); setTimeout(() => setIsGeneratingTasks(false), 1500); }} 
-                    disabled={isGeneratingTasks || !newTaskTitle.trim()} 
+                  <button
+                    onClick={() => {
+                      setIsGeneratingTasks(true);
+                      setTimeout(() => setIsGeneratingTasks(false), 1500);
+                    }}
+                    disabled={isGeneratingTasks || !newTaskTitle.trim()}
                     className="bg-indigo-100 text-indigo-700 border border-indigo-200 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center"
                   >
-                    {isGeneratingTasks ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />} ✨ AI Breakdown
+                    {isGeneratingTasks ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-4 h-4 mr-2" />
+                    )}{' '}
+                    ✨ AI Breakdown
                   </button>
                 </div>
               </div>
             )}
+            <div className="flex flex-wrap gap-2 border-b border-gray-100 bg-white px-4 py-3">
+              {(
+                [
+                  { id: 'all' as const, label: 'All' },
+                  { id: 'overdue' as const, label: 'Overdue' },
+                  { id: 'dueToday' as const, label: 'Due today' },
+                  { id: 'highPriority' as const, label: 'High priority' },
+                ] as const
+              ).map((chip) => (
+                <button
+                  key={chip.id}
+                  type="button"
+                  onClick={() => setTaskListFilter(chip.id)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    taskListFilter === chip.id
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
             <div className="divide-y divide-gray-100">
               {(resident.tasks || []).length === 0 ? (
-                <div className="p-8 text-center text-gray-500">No active tasks.</div>
-              ) : (resident.tasks || []).map((task: any) => (
-                <div key={task.id} className="p-4 flex items-center gap-4 hover:bg-slate-50 transition-colors">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        const nextStatus = task.status === 'Completed' ? 'Open' : 'Completed';
-                        await api.patch(`/api/v1/residents/${resident.id}/tasks/${task.id}`, { status: nextStatus });
-                        await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
-                      } catch (e) {
-                        console.error(e);
-                        alert('Could not update task. Please try again.');
-                      }
-                    }}
-                    className={`w-6 h-6 rounded border flex items-center justify-center shrink-0 ${task.status === 'Completed' ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 bg-white'}`}
-                    title={task.status === 'Completed' ? 'Mark as open' : 'Mark as completed'}
-                  >
-                    {task.status === 'Completed' && <CheckCircle2 className="w-4 h-4" />}
-                  </button>
-                  <div className="flex-1">
-                    <p className={`text-sm font-medium ${task.status === 'Completed' ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{task.title}</p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Due: {task.dueDate || '—'} •{' '}
-                      <span className={task.priority === 'High' ? 'text-rose-600 font-semibold' : ''}>
-                        {task.priority} Priority
-                      </span>
-                    </p>
-                  </div>
-                </div>
-              ))}
+                <div className="p-8 text-center text-gray-500">No tasks yet.</div>
+              ) : filteredTasks.length === 0 ? (
+                <div className="p-8 text-center text-gray-500">No tasks match this filter.</div>
+              ) : (
+                filteredTasks.map((task: any) => {
+                  const overdue = isTaskOverdue(task);
+                  const dueToday = isTaskDueToday(task);
+                  const high = taskPriorityIsHighClient(task.priority);
+                  const isEditing = editingTaskId === task.id;
+                  return (
+                    <div key={task.id} className="p-4 flex flex-col gap-3 sm:flex-row sm:items-start hover:bg-slate-50 transition-colors">
+                      <div className="flex items-start gap-3 w-full">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              const nextStatus = task.status === 'Completed' ? 'Open' : 'Completed';
+                              await api.patch(`/api/v1/residents/${resident.id}/tasks/${task.id}`, {
+                                status: nextStatus,
+                              });
+                              await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+                            } catch (e) {
+                              console.error(e);
+                              alert('Could not update task. Please try again.');
+                            }
+                          }}
+                          className={`mt-0.5 w-6 h-6 rounded border flex items-center justify-center shrink-0 ${
+                            task.status === 'Completed'
+                              ? 'bg-emerald-500 border-emerald-500 text-white'
+                              : 'border-gray-300 bg-white'
+                          }`}
+                          title={task.status === 'Completed' ? 'Mark as open' : 'Mark as completed'}
+                        >
+                          {task.status === 'Completed' && <CheckCircle2 className="w-4 h-4" />}
+                        </button>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p
+                              className={`text-sm font-medium ${
+                                task.status === 'Completed' ? 'text-gray-400 line-through' : 'text-gray-900'
+                              }`}
+                            >
+                              {task.title}
+                            </p>
+                            {overdue ? (
+                              <span className="text-[10px] font-bold uppercase tracking-wide text-rose-700 bg-rose-50 border border-rose-100 rounded px-1.5 py-0.5">
+                                Overdue
+                              </span>
+                            ) : null}
+                            {dueToday && !overdue ? (
+                              <span className="text-[10px] font-bold uppercase tracking-wide text-amber-800 bg-amber-50 border border-amber-100 rounded px-1.5 py-0.5">
+                                Due today
+                              </span>
+                            ) : null}
+                            {high ? (
+                              <span className="text-[10px] font-bold uppercase tracking-wide text-indigo-800 bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5">
+                                High priority
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            Due: {task.dueDate || '—'} • Priority:{' '}
+                            <span className={high ? 'text-rose-600 font-semibold' : ''}>{task.priority}</span>
+                            {task.assignedToName ? (
+                              <>
+                                {' '}
+                                • Assigned: <span className="font-medium text-gray-700">{task.assignedToName}</span>
+                              </>
+                            ) : null}
+                          </p>
+                          {isEditing ? (
+                            <div className="mt-3 flex flex-col sm:flex-row flex-wrap gap-2 items-stretch sm:items-end">
+                              <input
+                                type="date"
+                                value={editDue}
+                                onChange={(e) => setEditDue(e.target.value)}
+                                className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+                              />
+                              <select
+                                value={editPriority}
+                                onChange={(e) => setEditPriority(e.target.value)}
+                                className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+                              >
+                                <option value="LOW">Low</option>
+                                <option value="NORMAL">Normal</option>
+                                <option value="HIGH">High</option>
+                                <option value="CRITICAL">Critical</option>
+                              </select>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  disabled={savingTaskId === task.id}
+                                  onClick={async () => {
+                                    setSavingTaskId(task.id);
+                                    try {
+                                      await api.patch(`/api/v1/residents/${resident.id}/tasks/${task.id}`, {
+                                        dueDate: editDue || null,
+                                        priority: editPriority,
+                                      });
+                                      setEditingTaskId(null);
+                                      await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+                                    } catch (e) {
+                                      console.error(e);
+                                      alert('Could not save task changes.');
+                                    } finally {
+                                      setSavingTaskId(null);
+                                    }
+                                  }}
+                                  className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50"
+                                >
+                                  {savingTaskId === task.id ? 'Saving…' : 'Save'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingTaskId(null)}
+                                  className="border border-gray-300 bg-white px-3 py-1.5 rounded-lg text-xs font-medium"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : !isReadOnly ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingTaskId(task.id);
+                                  setEditDue(task.dueDateIso || '');
+                                  setEditPriority(taskPriorityToSelectKey(task.priority));
+                                }}
+                                className="text-xs font-semibold text-blue-600 hover:text-blue-800"
+                              >
+                                Edit due / priority
+                              </button>
+                              {canAssignTasks && user?.id ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    disabled={assigningTaskId === task.id}
+                                    onClick={async () => {
+                                      setAssigningTaskId(task.id);
+                                      try {
+                                        await api.patch(`/api/v1/residents/${resident.id}/tasks/${task.id}`, {
+                                          assigned_to: user.id,
+                                        });
+                                        await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+                                      } catch (e) {
+                                        console.error(e);
+                                        const msg =
+                                          typeof e === 'object' &&
+                                          e !== null &&
+                                          'response' in e &&
+                                          typeof (e as { response?: { data?: { error?: string } } }).response?.data
+                                            ?.error === 'string'
+                                            ? (e as { response: { data: { error: string } } }).response.data.error
+                                            : 'Could not assign task.';
+                                        alert(msg);
+                                      } finally {
+                                        setAssigningTaskId(null);
+                                      }
+                                    }}
+                                    className="text-xs font-semibold text-slate-700 hover:text-slate-900 disabled:opacity-50"
+                                  >
+                                    {assigningTaskId === task.id ? 'Assigning…' : 'Assign to me'}
+                                  </button>
+                                  {task.assignedToId ? (
+                                    <button
+                                      type="button"
+                                      disabled={assigningTaskId === task.id}
+                                      onClick={async () => {
+                                        setAssigningTaskId(task.id);
+                                        try {
+                                          await api.patch(`/api/v1/residents/${resident.id}/tasks/${task.id}`, {
+                                            assigned_to: null,
+                                          });
+                                          await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+                                        } catch (e) {
+                                          console.error(e);
+                                          alert('Could not clear assignee.');
+                                        } finally {
+                                          setAssigningTaskId(null);
+                                        }
+                                      }}
+                                      className="text-xs font-semibold text-rose-600 hover:text-rose-800 disabled:opacity-50"
+                                    >
+                                      Clear assignee
+                                    </button>
+                                  ) : null}
+                                </>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>

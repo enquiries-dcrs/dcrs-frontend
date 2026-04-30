@@ -28,7 +28,11 @@ export interface ResidentDetail {
     title: string;
     priority: string;
     status: string;
-    dueDate: string;
+    dueDate: string | null;
+    /** YYYY-MM-DD when due_date is set (for filters / overdue). */
+    dueDateIso?: string | null;
+    assignedToId?: string | null;
+    assignedToName?: string | null;
   }>;
   observations?: Array<{
     type: string;

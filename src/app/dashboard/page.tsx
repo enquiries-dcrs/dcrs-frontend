@@ -2,15 +2,27 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { useResidents } from "@/hooks/useResidents";
-import { TrendingUp, Users, AlertTriangle, Loader2 } from "lucide-react";
+import { TrendingUp, Users, AlertTriangle, Loader2, ListChecks } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { useGlobalStore } from "@/store/useGlobalStore";
+import { api } from "@/lib/api";
 
 export default function DashboardPage() {
   const router = useRouter();
   const { data: residents, isLoading } = useResidents();
   const selectedHomeId = useGlobalStore((state) => state.selectedHomeId);
+
+  const { data: overdueTasksData, isLoading: overdueTasksLoading } = useQuery({
+    queryKey: ["tasks-inbox", "overdue"],
+    queryFn: async () => {
+      const { data } = await api.get("/api/v1/tasks?overdue=true");
+      return data as { tasks: Array<{ id: string; title: string; serviceUserId: string; residentName: string }> };
+    },
+    staleTime: 30_000,
+  });
+  const overdueTasks = overdueTasksData?.tasks ?? [];
 
   // In production, these come from the backend. We'll mock them here for the UI layout.
   const allRiskAlerts = [
@@ -81,6 +93,50 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Overdue tasks (home-scoped) */}
+      <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-5 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="flex items-center text-lg font-bold text-amber-950">
+            <ListChecks className="mr-2 h-5 w-5 shrink-0" aria-hidden />
+            Overdue tasks
+          </h3>
+          <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-bold text-amber-900 ring-1 ring-amber-200">
+            {overdueTasksLoading ? "—" : overdueTasks.length}
+          </span>
+        </div>
+        {overdueTasksLoading ? (
+          <div className="flex items-center gap-2 text-sm text-amber-900/80">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            Loading…
+          </div>
+        ) : overdueTasks.length === 0 ? (
+          <p className="text-sm text-amber-900/80">No overdue open tasks in your scope.</p>
+        ) : (
+          <ul className="divide-y divide-amber-200/80 rounded-lg border border-amber-200/80 bg-white">
+            {overdueTasks.slice(0, 8).map((t) => (
+              <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-sm">
+                <div className="min-w-0">
+                  <span className="font-medium text-gray-900">{t.title}</span>
+                  {t.residentName ? (
+                    <span className="mt-0.5 block truncate text-xs text-gray-500">{t.residentName}</span>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => router.push(`/residents/${t.serviceUserId}`)}
+                  className="shrink-0 text-xs font-semibold text-blue-600 hover:text-blue-800"
+                >
+                  Open chart
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {overdueTasks.length > 8 ? (
+          <p className="mt-2 text-xs text-amber-900/70">Showing 8 of {overdueTasks.length}. Filter on each service user&apos;s Tasks tab.</p>
+        ) : null}
+      </div>
 
       {/* High-Level Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
