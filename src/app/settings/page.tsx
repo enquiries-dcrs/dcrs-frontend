@@ -29,21 +29,17 @@
    const [deactivatingUserId, setDeactivatingUserId] = useState<string | null>(null);
   const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false);
   const [templateDraftName, setTemplateDraftName] = useState('');
-  const [templateDraftJson, setTemplateDraftJson] = useState(
-    JSON.stringify(
-      {
-        fields: [
-          { key: 'risk', label: 'Overall risk', type: 'select', options: ['Low', 'Medium', 'High'] },
-          { key: 'notes', label: 'Notes', type: 'textarea' },
-        ],
-      },
-      null,
-      2
-    )
-  );
+  const [templateDraftFields, setTemplateDraftFields] = useState<Array<any>>([
+    { key: 'risk', label: 'Overall risk', type: 'select', required: true, options: ['Low', 'Medium', 'High'] },
+    { key: 'notes', label: 'Notes', type: 'textarea' },
+  ]);
+  const [templateDraftAdvanced, setTemplateDraftAdvanced] = useState(false);
+  const [templateDraftJson, setTemplateDraftJson] = useState('');
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState<string>('');
   const [editTemplateName, setEditTemplateName] = useState('');
+  const [editTemplateFields, setEditTemplateFields] = useState<Array<any>>([]);
+  const [editTemplateAdvanced, setEditTemplateAdvanced] = useState(false);
   const [editTemplateJson, setEditTemplateJson] = useState('');
   const [editTemplateActive, setEditTemplateActive] = useState(true);
   const [editTemplateBumpVersion, setEditTemplateBumpVersion] = useState(true);
@@ -259,12 +255,71 @@
       ? (templatesQueryError as { response?: { data?: { error?: string } } }).response?.data?.error
       : null;
 
+  const normalizeFieldsToSchema = (fields: Array<any>) => {
+    const safe = Array.isArray(fields) ? fields : [];
+    const cleaned = safe
+      .map((f) => {
+        const key = typeof f?.key === 'string' ? f.key.trim() : '';
+        if (!key) return null;
+        const type = typeof f?.type === 'string' ? f.type.trim() : 'text';
+        const out: any = {
+          key,
+          label: typeof f?.label === 'string' && f.label.trim() ? f.label.trim() : key,
+          type,
+        };
+        if (f.required === true) out.required = true;
+        if (type === 'select') {
+          const opts = Array.isArray(f.options) ? f.options : [];
+          out.options = opts
+            .map((o: any) => (o && typeof o === 'object' ? { label: o.label ?? o.value, value: o.value ?? o.label } : o))
+            .filter((o: any) => (typeof o === 'string' ? o.trim() !== '' : o?.value != null));
+        }
+        if (type === 'number') {
+          if (f.min !== '' && f.min != null && Number.isFinite(Number(f.min))) out.min = Number(f.min);
+          if (f.max !== '' && f.max != null && Number.isFinite(Number(f.max))) out.max = Number(f.max);
+        } else {
+          if (f.minLength !== '' && f.minLength != null && Number.isFinite(Number(f.minLength))) out.minLength = Number(f.minLength);
+          if (f.maxLength !== '' && f.maxLength != null && Number.isFinite(Number(f.maxLength))) out.maxLength = Number(f.maxLength);
+          if (typeof f.pattern === 'string' && f.pattern.trim()) out.pattern = f.pattern.trim();
+        }
+        return out;
+      })
+      .filter(Boolean);
+    return { fields: cleaned };
+  };
+
+  const schemaToEditableFields = (schema: any) => {
+    const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+    return fields.map((f: any) => ({
+      key: String(f?.key ?? ''),
+      label: String(f?.label ?? ''),
+      type: String(f?.type ?? 'text'),
+      required: Boolean(f?.required),
+      options: Array.isArray(f?.options)
+        ? f.options.map((o: any) => (o && typeof o === 'object' ? String(o.value ?? o.label ?? '') : String(o)))
+        : [],
+      min: f?.min ?? '',
+      max: f?.max ?? '',
+      minLength: f?.minLength ?? '',
+      maxLength: f?.maxLength ?? '',
+      pattern: f?.pattern ?? '',
+    }));
+  };
+
+  useEffect(() => {
+    setTemplateDraftJson(JSON.stringify(normalizeFieldsToSchema(templateDraftFields), null, 2));
+  }, [templateDraftFields]);
+
+  useEffect(() => {
+    setEditTemplateJson(JSON.stringify(normalizeFieldsToSchema(editTemplateFields), null, 2));
+  }, [editTemplateFields]);
+
   const createTemplate = async () => {
     const name = templateDraftName.trim();
     if (!name) return;
     let schema: any = null;
     try {
-      schema = JSON.parse(templateDraftJson);
+      schema = templateDraftAdvanced ? JSON.parse(templateDraftJson) : normalizeFieldsToSchema(templateDraftFields);
     } catch {
       alert('Template schema must be valid JSON.');
       return;
@@ -273,6 +328,11 @@
     try {
       await api.post('/api/v1/assessment-templates', { name, schemaJson: schema });
       setTemplateDraftName('');
+      setTemplateDraftFields([
+        { key: 'risk', label: 'Overall risk', type: 'select', required: true, options: ['Low', 'Medium', 'High'] },
+        { key: 'notes', label: 'Notes', type: 'textarea' },
+      ]);
+      setTemplateDraftAdvanced(false);
       await queryClient.invalidateQueries({ queryKey: ['assessment-templates-admin'] });
       alert('Template created.');
     } catch (e) {
@@ -289,7 +349,8 @@
     const t = list.find((x) => x.id === editingTemplateId);
     if (!t) return;
     setEditTemplateName(t.name || '');
-    setEditTemplateJson(JSON.stringify(t.schema_json ?? { fields: [] }, null, 2));
+    setEditTemplateFields(schemaToEditableFields(t.schema_json ?? { fields: [] }));
+    setEditTemplateAdvanced(false);
     setEditTemplateActive(Boolean(t.is_active));
     setEditTemplateBumpVersion(true);
   }, [editingTemplateId, templatesData?.templates]);
@@ -300,7 +361,7 @@
     if (!name) return;
     let schema: any = null;
     try {
-      schema = JSON.parse(editTemplateJson);
+      schema = editTemplateAdvanced ? JSON.parse(editTemplateJson) : normalizeFieldsToSchema(editTemplateFields);
     } catch {
       alert('Template schema must be valid JSON.');
       return;
@@ -726,16 +787,235 @@
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">Schema JSON</label>
-                  <textarea
-                    value={templateDraftJson}
-                    onChange={(e) => setTemplateDraftJson(e.target.value)}
-                    rows={12}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Format: {'{'} fields: [{'{' } key, label, type, options? {'}'}] {'}'}
-                  </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="block text-xs font-semibold text-gray-600">Fields</label>
+                    <button
+                      type="button"
+                      onClick={() => setTemplateDraftAdvanced((v) => !v)}
+                      className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+                    >
+                      {templateDraftAdvanced ? 'Use visual builder' : 'Advanced (JSON)'}
+                    </button>
+                  </div>
+
+                  {templateDraftAdvanced ? (
+                    <textarea
+                      value={templateDraftJson}
+                      onChange={(e) => setTemplateDraftJson(e.target.value)}
+                      rows={12}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500 mt-2"
+                    />
+                  ) : (
+                    <div className="mt-2 space-y-3">
+                      {(templateDraftFields || []).map((f, idx) => (
+                        <div key={`${idx}-${String(f.key || '')}`} className="rounded-lg border border-gray-200 bg-white p-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-gray-600 mb-1">Key</label>
+                              <input
+                                value={f.key ?? ''}
+                                onChange={(e) =>
+                                  setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, key: e.target.value } : x)))
+                                }
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="e.g. bmi"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-gray-600 mb-1">Label</label>
+                              <input
+                                value={f.label ?? ''}
+                                onChange={(e) =>
+                                  setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                                }
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="e.g. BMI"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-gray-600 mb-1">Type</label>
+                              <select
+                                value={f.type ?? 'text'}
+                                onChange={(e) =>
+                                  setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, type: e.target.value } : x)))
+                                }
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                              >
+                                <option value="text">Text</option>
+                                <option value="textarea">Textarea</option>
+                                <option value="number">Number</option>
+                                <option value="select">Select</option>
+                                <option value="checkbox">Checkbox</option>
+                              </select>
+                            </div>
+                            <div className="flex items-end">
+                              <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(f.required)}
+                                  onChange={(e) =>
+                                    setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, required: e.target.checked } : x)))
+                                  }
+                                />
+                                Required
+                              </label>
+                            </div>
+                          </div>
+
+                          {String(f.type || 'text') === 'select' ? (
+                            <div className="mt-3">
+                              <label className="block text-[11px] font-semibold text-gray-600 mb-1">Options (comma-separated)</label>
+                              <input
+                                value={Array.isArray(f.options) ? f.options.join(', ') : ''}
+                                onChange={(e) =>
+                                  setTemplateDraftFields((p) =>
+                                    p.map((x, i) =>
+                                      i === idx ? { ...x, options: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) } : x
+                                    )
+                                  )
+                                }
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Low, Medium, High"
+                              />
+                            </div>
+                          ) : null}
+
+                          {String(f.type || 'text') === 'number' ? (
+                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-[11px] font-semibold text-gray-600 mb-1">Min</label>
+                                <input
+                                  type="number"
+                                  value={f.min ?? ''}
+                                  onChange={(e) =>
+                                    setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, min: e.target.value } : x)))
+                                  }
+                                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-gray-600 mb-1">Max</label>
+                                <input
+                                  type="number"
+                                  value={f.max ?? ''}
+                                  onChange={(e) =>
+                                    setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, max: e.target.value } : x)))
+                                  }
+                                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {String(f.type || 'text') !== 'number' && String(f.type || 'text') !== 'checkbox' ? (
+                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              <div>
+                                <label className="block text-[11px] font-semibold text-gray-600 mb-1">Min length</label>
+                                <input
+                                  type="number"
+                                  value={f.minLength ?? ''}
+                                  onChange={(e) =>
+                                    setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, minLength: e.target.value } : x)))
+                                  }
+                                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-gray-600 mb-1">Max length</label>
+                                <input
+                                  type="number"
+                                  value={f.maxLength ?? ''}
+                                  onChange={(e) =>
+                                    setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, maxLength: e.target.value } : x)))
+                                  }
+                                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-gray-600 mb-1">Pattern (regex)</label>
+                                <input
+                                  value={f.pattern ?? ''}
+                                  onChange={(e) =>
+                                    setTemplateDraftFields((p) => p.map((x, i) => (i === idx ? { ...x, pattern: e.target.value } : x)))
+                                  }
+                                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="^\\d+$"
+                                />
+                              </div>
+                            </div>
+                          ) : null}
+
+                          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setTemplateDraftFields((p) => {
+                                    if (idx === 0) return p;
+                                    const next = [...p];
+                                    const tmp = next[idx - 1];
+                                    next[idx - 1] = next[idx];
+                                    next[idx] = tmp;
+                                    return next;
+                                  })
+                                }
+                                disabled={idx === 0}
+                                className="text-xs font-semibold text-slate-700 border border-gray-300 bg-white px-3 py-1.5 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                              >
+                                Up
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setTemplateDraftFields((p) => {
+                                    if (idx === p.length - 1) return p;
+                                    const next = [...p];
+                                    const tmp = next[idx + 1];
+                                    next[idx + 1] = next[idx];
+                                    next[idx] = tmp;
+                                    return next;
+                                  })
+                                }
+                                disabled={idx === templateDraftFields.length - 1}
+                                className="text-xs font-semibold text-slate-700 border border-gray-300 bg-white px-3 py-1.5 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                              >
+                                Down
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setTemplateDraftFields((p) => p.filter((_, i) => i !== idx))}
+                              className="text-xs font-semibold text-rose-700 border border-rose-200 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTemplateDraftFields((p) => [
+                            ...p,
+                            { key: '', label: '', type: 'text', required: false, options: [], min: '', max: '', minLength: '', maxLength: '', pattern: '' },
+                          ])
+                        }
+                        className="w-full rounded-lg border border-dashed border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        + Add field
+                      </button>
+
+                      <details className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                        <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                          Generated schema JSON (read-only preview)
+                        </summary>
+                        <pre className="mt-2 text-[11px] text-gray-700 overflow-auto whitespace-pre-wrap">
+                          {templateDraftJson}
+                        </pre>
+                      </details>
+                    </div>
+                  )}
                 </div>
                 <div className="flex justify-end">
                   <button
@@ -829,13 +1109,231 @@
                             </label>
                           </div>
                           <div>
-                            <label className="block text-xs font-semibold text-gray-600 mb-1">Schema JSON</label>
-                            <textarea
-                              value={editTemplateJson}
-                              onChange={(e) => setEditTemplateJson(e.target.value)}
-                              rows={10}
-                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500"
-                            />
+                            <div className="flex items-center justify-between gap-3">
+                              <label className="block text-xs font-semibold text-gray-600">Fields</label>
+                              <button
+                                type="button"
+                                onClick={() => setEditTemplateAdvanced((v) => !v)}
+                                className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+                              >
+                                {editTemplateAdvanced ? 'Use visual builder' : 'Advanced (JSON)'}
+                              </button>
+                            </div>
+
+                            {editTemplateAdvanced ? (
+                              <textarea
+                                value={editTemplateJson}
+                                onChange={(e) => setEditTemplateJson(e.target.value)}
+                                rows={10}
+                                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500 mt-2"
+                              />
+                            ) : (
+                              <div className="mt-2 space-y-3">
+                                {(editTemplateFields || []).map((f, idx) => (
+                                  <div key={`${idx}-${String(f.key || '')}`} className="rounded-lg border border-gray-200 bg-white p-3">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-gray-600 mb-1">Key</label>
+                                        <input
+                                          value={f.key ?? ''}
+                                          onChange={(e) =>
+                                            setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, key: e.target.value } : x)))
+                                          }
+                                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-gray-600 mb-1">Label</label>
+                                        <input
+                                          value={f.label ?? ''}
+                                          onChange={(e) =>
+                                            setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x)))
+                                          }
+                                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-[11px] font-semibold text-gray-600 mb-1">Type</label>
+                                        <select
+                                          value={f.type ?? 'text'}
+                                          onChange={(e) =>
+                                            setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, type: e.target.value } : x)))
+                                          }
+                                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                                        >
+                                          <option value="text">Text</option>
+                                          <option value="textarea">Textarea</option>
+                                          <option value="number">Number</option>
+                                          <option value="select">Select</option>
+                                          <option value="checkbox">Checkbox</option>
+                                        </select>
+                                      </div>
+                                      <div className="flex items-end">
+                                        <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                                          <input
+                                            type="checkbox"
+                                            checked={Boolean(f.required)}
+                                            onChange={(e) =>
+                                              setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, required: e.target.checked } : x)))
+                                            }
+                                          />
+                                          Required
+                                        </label>
+                                      </div>
+                                    </div>
+
+                                    {String(f.type || 'text') === 'select' ? (
+                                      <div className="mt-3">
+                                        <label className="block text-[11px] font-semibold text-gray-600 mb-1">Options (comma-separated)</label>
+                                        <input
+                                          value={Array.isArray(f.options) ? f.options.join(', ') : ''}
+                                          onChange={(e) =>
+                                            setEditTemplateFields((p) =>
+                                              p.map((x, i) =>
+                                                i === idx ? { ...x, options: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) } : x
+                                              )
+                                            )
+                                          }
+                                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                      </div>
+                                    ) : null}
+
+                                    {String(f.type || 'text') === 'number' ? (
+                                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div>
+                                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">Min</label>
+                                          <input
+                                            type="number"
+                                            value={f.min ?? ''}
+                                            onChange={(e) =>
+                                              setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, min: e.target.value } : x)))
+                                            }
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">Max</label>
+                                          <input
+                                            type="number"
+                                            value={f.max ?? ''}
+                                            onChange={(e) =>
+                                              setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, max: e.target.value } : x)))
+                                            }
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : null}
+
+                                    {String(f.type || 'text') !== 'number' && String(f.type || 'text') !== 'checkbox' ? (
+                                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                        <div>
+                                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">Min length</label>
+                                          <input
+                                            type="number"
+                                            value={f.minLength ?? ''}
+                                            onChange={(e) =>
+                                              setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, minLength: e.target.value } : x)))
+                                            }
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">Max length</label>
+                                          <input
+                                            type="number"
+                                            value={f.maxLength ?? ''}
+                                            onChange={(e) =>
+                                              setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, maxLength: e.target.value } : x)))
+                                            }
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="block text-[11px] font-semibold text-gray-600 mb-1">Pattern (regex)</label>
+                                          <input
+                                            value={f.pattern ?? ''}
+                                            onChange={(e) =>
+                                              setEditTemplateFields((p) => p.map((x, i) => (i === idx ? { ...x, pattern: e.target.value } : x)))
+                                            }
+                                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : null}
+
+                                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setEditTemplateFields((p) => {
+                                              if (idx === 0) return p;
+                                              const next = [...p];
+                                              const tmp = next[idx - 1];
+                                              next[idx - 1] = next[idx];
+                                              next[idx] = tmp;
+                                              return next;
+                                            })
+                                          }
+                                          disabled={idx === 0}
+                                          className="text-xs font-semibold text-slate-700 border border-gray-300 bg-white px-3 py-1.5 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                                        >
+                                          Up
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setEditTemplateFields((p) => {
+                                              if (idx === p.length - 1) return p;
+                                              const next = [...p];
+                                              const tmp = next[idx + 1];
+                                              next[idx + 1] = next[idx];
+                                              next[idx] = tmp;
+                                              return next;
+                                            })
+                                          }
+                                          disabled={idx === editTemplateFields.length - 1}
+                                          className="text-xs font-semibold text-slate-700 border border-gray-300 bg-white px-3 py-1.5 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                                        >
+                                          Down
+                                        </button>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditTemplateFields((p) => p.filter((_, i) => i !== idx))}
+                                        className="text-xs font-semibold text-rose-700 border border-rose-200 bg-rose-50 px-3 py-1.5 rounded-lg hover:bg-rose-100"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditTemplateFields((p) => [
+                                      ...p,
+                                      { key: '', label: '', type: 'text', required: false, options: [], min: '', max: '', minLength: '', maxLength: '', pattern: '' },
+                                    ])
+                                  }
+                                  className="w-full rounded-lg border border-dashed border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                                >
+                                  + Add field
+                                </button>
+
+                                <details className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                                  <summary className="text-xs font-semibold text-gray-700 cursor-pointer">
+                                    Generated schema JSON (read-only preview)
+                                  </summary>
+                                  <pre className="mt-2 text-[11px] text-gray-700 overflow-auto whitespace-pre-wrap">
+                                    {editTemplateJson}
+                                  </pre>
+                                </details>
+                              </div>
+                            )}
                           </div>
                           <div className="flex justify-end gap-2">
                             <button
