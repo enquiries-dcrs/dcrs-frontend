@@ -544,7 +544,7 @@ function PeepTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: b
   const queryClient = useQueryClient();
   const canEdit = useGlobalStore((s) => {
     const role = s.user?.role as string | undefined;
-    return Boolean(role) && ['Home Manager', 'Regional Manager', 'Admin'].includes(role);
+    return Boolean(role) && ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(role);
   });
 
   const { data, isLoading, error } = useQuery({
@@ -783,7 +783,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
 
   const canEditProfilePhoto =
     Boolean(user?.role) &&
-    ['Regional Manager', 'Home Manager', 'Admin'].includes(user.role as string);
+    ['Deputy Manager', 'Regional Manager', 'Home Manager', 'Admin'].includes(user.role as string);
 
   const [isProfilePhotoModalOpen, setIsProfilePhotoModalOpen] = useState(false);
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);

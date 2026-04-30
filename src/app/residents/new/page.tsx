@@ -9,7 +9,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 
 type HomeRow = { id: string; name: string };
 
-const MANAGEMENT_ROLES = new Set(["Regional Manager", "Home Manager", "Admin"]);
+const MANAGEMENT_ROLES = new Set(["Deputy Manager", "Regional Manager", "Home Manager", "Admin"]);
 
 export default function NewServiceUserPage() {
   const router = useRouter();

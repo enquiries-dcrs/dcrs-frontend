@@ -640,11 +640,12 @@
                      value={inviteForm.role} onChange={e => setInviteForm({...inviteForm, role: e.target.value})}
                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                    >
-                     <option value="Carer">Carer (Basic Access)</option>
-                     <option value="Senior Carer">Senior Carer (eMAR Access)</option>
-                     <option value="Nurse">Nurse (Clinical Updates)</option>
-                     <option value="Home Manager">Home Manager (Management Access)</option>
-                     <option value="Regional Manager">Regional Manager (Full Admin)</option>
+                    <option value="Carer">Carer (Basic Access)</option>
+                    <option value="Senior Carer">Senior Carer (Shift Lead)</option>
+                    <option value="Nurse">Nurse (Clinical Updates)</option>
+                    <option value="Deputy Manager">Deputy Manager (Management)</option>
+                    <option value="Home Manager">Home Manager (Management)</option>
+                    <option value="Regional Manager">Regional Manager (Group Admin)</option>
                    </select>
                  </div>
 
