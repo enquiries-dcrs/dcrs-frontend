@@ -773,6 +773,370 @@ function PeepTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: b
   );
 }
 
+function CarePlanTab({
+  residentId,
+  isReadOnly,
+  onTaskCreated,
+}: {
+  residentId: string;
+  isReadOnly: boolean;
+  onTaskCreated?: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const userRole = useGlobalStore((s) => (s.user?.role as string | undefined) || undefined);
+
+  const canEdit = Boolean(userRole) && ['Senior Carer', 'Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(userRole as string);
+  const canArchive = Boolean(userRole) && ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(userRole as string);
+
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['care-plans', residentId],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/care-plans`);
+      return data as {
+        plans: Array<{
+          id: string;
+          title: string;
+          status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
+          created_at: string;
+          updated_at: string;
+          goals: Array<{
+            id: string;
+            care_plan_id: string;
+            goal_text: string;
+            target_date: string | null;
+            status: 'OPEN' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
+            updated_at: string;
+          }>;
+        }>;
+      };
+    },
+    staleTime: 15_000,
+  });
+
+  const plans = data?.plans ?? [];
+  const activePlan = plans.find((p) => p.status === 'ACTIVE') ?? null;
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  useEffect(() => {
+    if (selectedPlanId && plans.some((p) => p.id === selectedPlanId)) return;
+    if (activePlan?.id) setSelectedPlanId(activePlan.id);
+    else if (plans[0]?.id) setSelectedPlanId(plans[0].id);
+    else setSelectedPlanId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plans.map((p) => p.id).join('|'), activePlan?.id]);
+
+  const selectedPlan = selectedPlanId ? plans.find((p) => p.id === selectedPlanId) ?? null : null;
+
+  const [newPlanTitle, setNewPlanTitle] = useState('Care plan');
+  const [creatingPlan, setCreatingPlan] = useState(false);
+  const createPlan = async () => {
+    if (!canEdit || isReadOnly) return;
+    const title = newPlanTitle.trim();
+    if (!title) return;
+    setCreatingPlan(true);
+    try {
+      await api.post(`/api/v1/residents/${residentId}/care-plans`, { title, status: 'ACTIVE' });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+      setNewPlanTitle('Care plan');
+    } catch (e) {
+      console.error(e);
+      alert('Could not create care plan. Check permissions and that the DB migration has been applied.');
+    } finally {
+      setCreatingPlan(false);
+    }
+  };
+
+  const [goalText, setGoalText] = useState('');
+  const [goalTarget, setGoalTarget] = useState('');
+  const [addingGoal, setAddingGoal] = useState(false);
+  const addGoal = async () => {
+    if (!selectedPlan || !canEdit || isReadOnly) return;
+    const text = goalText.trim();
+    if (!text) return;
+    setAddingGoal(true);
+    try {
+      await api.post(`/api/v1/care-plans/${selectedPlan.id}/goals`, {
+        goalText: text,
+        targetDate: goalTarget.trim() || null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+      setGoalText('');
+      setGoalTarget('');
+    } catch (e) {
+      console.error(e);
+      alert('Could not add goal.');
+    } finally {
+      setAddingGoal(false);
+    }
+  };
+
+  const updateGoalStatus = async (goalId: string, status: string) => {
+    if (!selectedPlan || !canEdit || isReadOnly) return;
+    try {
+      await api.patch(`/api/v1/care-plans/${selectedPlan.id}/goals/${goalId}`, { status });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not update goal.');
+    }
+  };
+
+  const [activatingPlan, setActivatingPlan] = useState(false);
+  const setPlanActive = async () => {
+    if (!selectedPlan || !canEdit || isReadOnly) return;
+    if (selectedPlan.status === 'ACTIVE') return;
+    setActivatingPlan(true);
+    try {
+      await api.patch(`/api/v1/care-plans/${selectedPlan.id}`, { status: 'ACTIVE' });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not set plan active.');
+    } finally {
+      setActivatingPlan(false);
+    }
+  };
+
+  const archivePlan = async () => {
+    if (!selectedPlan || !canArchive || isReadOnly) return;
+    if (!window.confirm('Archive this care plan? It will become read-only.')) return;
+    try {
+      await api.patch(`/api/v1/care-plans/${selectedPlan.id}`, { status: 'ARCHIVED' });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not archive care plan.');
+    }
+  };
+
+  const [creatingTaskGoalId, setCreatingTaskGoalId] = useState<string | null>(null);
+  const createTaskFromGoal = async (goalId: string, goalTextValue: string) => {
+    if (!canEdit || isReadOnly) return;
+    const title = goalTextValue.trim().replace(/\s+/g, ' ');
+    if (!title) return;
+    setCreatingTaskGoalId(goalId);
+    try {
+      await api.post(`/api/v1/residents/${residentId}/tasks`, {
+        title: title.length > 180 ? `${title.slice(0, 177)}…` : title,
+        priority: 'Normal',
+      });
+      if (typeof onTaskCreated === 'function') onTaskCreated();
+      await queryClient.invalidateQueries({ queryKey: ['resident', residentId] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not create task from goal.');
+    } finally {
+      setCreatingTaskGoalId(null);
+    }
+  };
+
+  const errMsg =
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof (error as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+      ? (error as { response: { data: { error: string } } }).response.data.error
+      : null;
+
+  return (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-5 border-b border-gray-200 bg-slate-50 flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Care plan</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              Goals and outcomes for this resident. {canEdit ? 'Senior staff and managers can edit.' : 'Read-only.'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {activePlan && canArchive ? (
+              <button
+                type="button"
+                onClick={archivePlan}
+                disabled={isReadOnly || activePlan.status === 'ARCHIVED'}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Archive
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="p-6 text-center text-gray-500">Loading care plan…</div>
+        ) : isError ? (
+          <div className="p-6 text-center text-rose-700 bg-rose-50/40">
+            {errMsg || 'Could not load care plans.'}
+          </div>
+        ) : !selectedPlan ? (
+          <div className="p-6 space-y-4">
+            <div className="text-sm text-gray-600">
+              No care plan yet. Create one to start capturing structured goals and outcomes.
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Plan title</label>
+                <input
+                  value={newPlanTitle}
+                  onChange={(e) => setNewPlanTitle(e.target.value)}
+                  disabled={!canEdit || isReadOnly}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={createPlan}
+                disabled={!canEdit || isReadOnly || creatingPlan || !newPlanTitle.trim()}
+                className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {creatingPlan ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Create plan
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="p-5 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <div className="text-sm font-semibold text-gray-900">
+                  {selectedPlan.title}{' '}
+                  <span className="ml-2 text-xs font-medium text-gray-600">({selectedPlan.status})</span>
+                </div>
+                <div className="text-xs text-gray-500">
+                  Updated {selectedPlan.updated_at ? new Date(selectedPlan.updated_at).toLocaleString() : '—'}
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                {plans.length > 1 ? (
+                  <select
+                    value={selectedPlanId ?? ''}
+                    onChange={(e) => setSelectedPlanId(e.target.value || null)}
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {plans.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.status === 'ACTIVE'
+                          ? 'ACTIVE — '
+                          : p.status === 'ARCHIVED'
+                            ? 'ARCHIVED — '
+                            : p.status === 'DRAFT'
+                              ? 'DRAFT — '
+                              : ''}
+                        {p.title}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+                {canEdit ? (
+                  <button
+                    type="button"
+                    onClick={setPlanActive}
+                    disabled={isReadOnly || selectedPlan.status === 'ARCHIVED' || selectedPlan.status === 'ACTIVE' || activatingPlan}
+                    className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    title="Sets this plan as the resident's single active plan"
+                  >
+                    {activatingPlan ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Set active
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 overflow-hidden">
+              <div className="p-4 bg-white border-b border-gray-200">
+                <div className="text-sm font-semibold text-gray-900">Goals</div>
+                <div className="text-xs text-gray-500 mt-1">
+                  Add goals/outcomes and track progress over time.
+                </div>
+              </div>
+
+              <div className="p-4 space-y-3 bg-slate-50/30">
+                <label className="block text-xs font-semibold text-gray-600">New goal</label>
+                <textarea
+                  value={goalText}
+                  onChange={(e) => setGoalText(e.target.value)}
+                  rows={3}
+                  disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                  placeholder="E.g. Maintain hydration with at least 1500ml daily unless contraindicated"
+                />
+                <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">Target date (optional)</label>
+                    <input
+                      type="date"
+                      value={goalTarget}
+                      onChange={(e) => setGoalTarget(e.target.value)}
+                      disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addGoal}
+                    disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED' || addingGoal || !goalText.trim()}
+                    className="inline-flex items-center justify-center rounded-lg bg-slate-800 px-5 py-2 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
+                  >
+                    {addingGoal ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Add goal
+                  </button>
+                </div>
+              </div>
+
+              <div className="divide-y divide-gray-100 bg-white">
+                {(selectedPlan.goals || []).length === 0 ? (
+                  <div className="p-5 text-sm text-gray-500">No goals yet.</div>
+                ) : (
+                  (selectedPlan.goals || []).map((g) => (
+                    <div key={g.id} className="p-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-gray-900">{g.goal_text}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          Status: <span className="font-semibold text-gray-700">{g.status}</span>
+                          {g.target_date ? (
+                            <span className="ml-2">Target: {new Date(g.target_date).toLocaleDateString()}</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => createTaskFromGoal(g.id, g.goal_text)}
+                          disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED' || creatingTaskGoalId === g.id}
+                          className="inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                          title="Create a task from this goal"
+                        >
+                          {creatingTaskGoalId === g.id ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                          Create task
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateGoalStatus(g.id, 'IN_PROGRESS')}
+                          disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                          className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          In progress
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateGoalStatus(g.id, 'DONE')}
+                          disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          Done
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ResidentProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = React.use(params);
   const router = useRouter();
@@ -854,7 +1218,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   }
 
   const isReadOnly = resident.status === 'ARCHIVED';
-  const tabs = ['Overview', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
+  const tabs = ['Overview', 'Care plan', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
@@ -1256,6 +1620,15 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
             </div>
           </div>
         </div>
+      )}
+
+      {/* --- TAB: CARE PLAN --- */}
+      {activeTab === 'Care plan' && (
+        <CarePlanTab
+          residentId={resident.id}
+          isReadOnly={isReadOnly}
+          onTaskCreated={() => setActiveTab('Tasks')}
+        />
       )}
 
       {/* --- TAB: TASKS --- */}
