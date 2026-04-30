@@ -49,6 +49,70 @@ const TASK_ASSIGN_ROLES = new Set([
   'Admin',
 ]);
 
+function observationSinceIso(days: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString();
+}
+
+function parseObservationNumeric(code: string, value: string): number | null {
+  if (!value) return null;
+  if (code === 'BP') {
+    const m = value.match(/^\s*(\d+(?:\.\d+)?)/);
+    return m && Number.isFinite(Number(m[1])) ? Number(m[1]) : null;
+  }
+  const n = parseFloat(String(value).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function ObservationTrendChart({
+  title,
+  points,
+}: {
+  title: string;
+  points: Array<{ at: string; v: number }>;
+}) {
+  if (points.length < 2) {
+    return (
+      <p className="text-sm text-gray-500">
+        Need at least two numeric readings for {title} in this date range to show a trend.
+      </p>
+    );
+  }
+  const vals = points.map((p) => p.v);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const w = 320;
+  const h = 120;
+  const pad = 8;
+  const pts = points.map((p, i) => {
+    const x = pad + (i / (points.length - 1)) * (w - pad * 2);
+    const yn = (p.v - min) / span;
+    const y = pad + (1 - yn) * (h - pad * 2);
+    return `${x},${y}`;
+  });
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold text-gray-600">{title}</p>
+      <svg width={w} height={h} className="text-blue-600" aria-hidden>
+        <rect x={0} y={0} width={w} height={h} fill="#f8fafc" rx={8} />
+        <polyline
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          points={pts.join(' ')}
+        />
+      </svg>
+      <p className="text-xs text-gray-500">
+        Range in window: {min.toFixed(1)} – {max.toFixed(1)}
+      </p>
+    </div>
+  );
+}
+
 function taskPriorityToSelectKey(p: string | undefined): string {
   const s = String(p || '')
     .trim()
@@ -2058,7 +2122,15 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
 
   // --- Observations Tab State ---
   const [isAddingObservation, setIsAddingObservation] = useState(false);
-  const [observationForm, setObservationForm] = useState({ type: 'Blood Pressure', value: '', unit: 'mmHg' });
+  const [observationForm, setObservationForm] = useState({
+    type: 'Blood Pressure',
+    value: '',
+    unit: 'mmHg',
+    notes: '',
+  });
+  const [obsTrendRange, setObsTrendRange] = useState<'7d' | '30d'>('7d');
+  const [obsTrendType, setObsTrendType] = useState<string>('BP');
+  const [showObsTrends, setShowObsTrends] = useState(false);
   
   // --- eMAR Tab State ---
   const [isAddingMed, setIsAddingMed] = useState(false);
@@ -2074,6 +2146,41 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       return data;
     }
   });
+
+  const obsQueryEnabled = !isLoading && !!resident?.id && activeTab === 'Observations';
+  const { data: observationsQueryData, isLoading: observationsQueryLoading } = useQuery({
+    queryKey: ['resident-observations', resolvedParams.id, obsTrendRange],
+    enabled: obsQueryEnabled,
+    queryFn: async () => {
+      const since = observationSinceIso(obsTrendRange === '7d' ? 7 : 30);
+      const { data } = await api.get(`/api/v1/residents/${resolvedParams.id}/observations`, {
+        params: { since },
+      });
+      return data as { observations: Array<any> };
+    },
+  });
+
+  const { data: observationsSummaryData } = useQuery({
+    queryKey: ['resident-observations-summary', resolvedParams.id],
+    enabled: obsQueryEnabled,
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${resolvedParams.id}/observations/summary`);
+      return data as { latestByType: Array<any> };
+    },
+  });
+
+  const trendPoints = useMemo(() => {
+    const rows = observationsQueryData?.observations ?? [];
+    const filtered = rows
+      .filter((o: any) => String(o.type) === obsTrendType)
+      .map((o: any) => ({
+        at: o.recordedAt,
+        v: parseObservationNumeric(obsTrendType, String(o.value ?? '')),
+      }))
+      .filter((p) => p.v != null && Number.isFinite(p.v)) as Array<{ at: string; v: number }>;
+    filtered.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+    return filtered;
+  }, [observationsQueryData?.observations, obsTrendType]);
 
   const filteredTasks = useMemo(() => {
     const list = [...(resident?.tasks || [])];
@@ -2102,6 +2209,8 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
+
+  const displayObservations = observationsQueryData?.observations ?? resident.observations ?? [];
 
   // --- Core Handlers ---
   const openBedModal = (action: 'transfer' | 'admit') => {
@@ -2238,6 +2347,36 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       alert('Could not delete document.');
     } finally {
       setDocumentDeletingId(null);
+    }
+  };
+
+  const handleSaveObservation = async () => {
+    if (isReadOnly) return;
+    const v = observationForm.value.trim();
+    if (!v) return;
+    try {
+      await api.post(`/api/v1/residents/${resident.id}/observations`, {
+        type: observationForm.type,
+        value: v,
+        unit: observationForm.unit || undefined,
+        notes: observationForm.notes?.trim() || undefined,
+      });
+      const { type, unit } = observationForm;
+      setIsAddingObservation(false);
+      setObservationForm({ type, value: '', unit, notes: '' });
+      await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+      await queryClient.invalidateQueries({ queryKey: ['resident-observations', resident.id] });
+      await queryClient.invalidateQueries({ queryKey: ['resident-observations-summary', resident.id] });
+    } catch (e) {
+      console.error(e);
+      const msg =
+        typeof e === 'object' &&
+        e !== null &&
+        'response' in e &&
+        typeof (e as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+          ? (e as { response: { data: { error: string } } }).response.data.error
+          : 'Could not save observation.';
+      alert(msg);
     }
   };
 
@@ -2991,78 +3130,247 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       {activeTab === 'Observations' && (
         <div className="space-y-6 animate-in fade-in">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <h3 className="text-lg font-semibold text-gray-900">Clinical Observations</h3>
-            <div className="flex gap-2">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Clinical Observations</h3>
+              <p className="text-sm text-gray-500">Record vitals and review recent trends.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setShowObsTrends((v) => !v)}
+                className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors flex items-center shadow-sm ${
+                  showObsTrends
+                    ? 'border-cyan-300 bg-cyan-100 text-cyan-900'
+                    : 'border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100'
+                }`}
+              >
+                <Activity className="mr-2 h-4 w-4" aria-hidden />
+                {showObsTrends ? 'Hide trends' : 'View trends'}
+              </button>
               {!isReadOnly && (
-                <>
-                  <button className="bg-cyan-50 text-cyan-700 border border-cyan-200 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center shadow-sm">
-                    <Sparkles className="w-4 h-4 mr-2" /> ✨ Analyze Trends
-                  </button>
-                  <button onClick={() => setIsAddingObservation(!isAddingObservation)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center shadow-sm">
-                    <Plus className="w-4 h-4 mr-2" /> Record Vitals
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingObservation(!isAddingObservation)}
+                  className="flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700"
+                >
+                  <Plus className="mr-2 h-4 w-4" /> Record vitals
+                </button>
               )}
             </div>
           </div>
 
+          {observationsSummaryData?.latestByType && observationsSummaryData.latestByType.length > 0 ? (
+            <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+              <span className="w-full text-xs font-semibold uppercase tracking-wide text-slate-500">Latest by type</span>
+              {observationsSummaryData.latestByType.slice(0, 8).map((o: any) => (
+                <span
+                  key={String(o.type)}
+                  className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-800"
+                >
+                  <span className="font-semibold">{o.typeLabel || o.type}</span>
+                  <span className="text-slate-500">
+                    {o.value}
+                    {o.unit ? ` ${o.unit}` : ''}
+                  </span>
+                </span>
+              ))}
+            </div>
+          ) : null}
+
+          {showObsTrends && (
+            <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-900">Trend (numeric)</h4>
+                  <p className="text-xs text-gray-500">Uses readings in the selected window. Blood pressure uses systolic (first number).</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    value={obsTrendType}
+                    onChange={(e) => setObsTrendType(e.target.value)}
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="BP">Blood pressure</option>
+                    <option value="PULSE">Heart rate</option>
+                    <option value="TEMP">Temperature</option>
+                    <option value="WEIGHT">Weight</option>
+                    <option value="SPO2">SpO₂</option>
+                    <option value="RESP_RATE">Respiratory rate</option>
+                    <option value="PAIN">Pain</option>
+                  </select>
+                  <div className="flex rounded-lg border border-gray-200 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setObsTrendRange('7d')}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
+                        obsTrendRange === '7d' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      7 days
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setObsTrendRange('30d')}
+                      className={`rounded-md px-3 py-1.5 text-xs font-semibold ${
+                        obsTrendRange === '30d' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      30 days
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {observationsQueryLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  Loading chart data…
+                </div>
+              ) : (
+                <ObservationTrendChart
+                  title={
+                    {
+                      BP: 'Blood pressure (systolic)',
+                      PULSE: 'Heart rate',
+                      TEMP: 'Temperature',
+                      WEIGHT: 'Weight',
+                      SPO2: 'SpO₂',
+                      RESP_RATE: 'Respiratory rate',
+                      PAIN: 'Pain',
+                    }[obsTrendType] || obsTrendType
+                  }
+                  points={trendPoints}
+                />
+              )}
+            </div>
+          )}
+
           {isAddingObservation && !isReadOnly && (
-            <div className="bg-blue-50 rounded-xl p-5 border border-blue-100 grid grid-cols-1 md:grid-cols-4 gap-4 items-end animate-in fade-in slide-in-from-top-4">
+            <div className="grid animate-in fade-in slide-in-from-top-4 grid-cols-1 gap-4 rounded-xl border border-blue-100 bg-blue-50 p-5 md:grid-cols-2">
               <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">Observation Type</label>
-                <select 
-                  value={observationForm.type} 
-                  onChange={e => {
+                <label className="mb-1 block text-xs font-semibold text-blue-900">Observation type</label>
+                <select
+                  value={observationForm.type}
+                  onChange={(e) => {
                     const type = e.target.value;
                     let unit = 'mmHg';
                     if (type === 'Temperature') unit = '°C';
                     if (type === 'Heart Rate') unit = 'bpm';
                     if (type === 'Weight') unit = 'kg';
+                    if (type === 'SpO2') unit = '%';
+                    if (type === 'Respiratory rate') unit = '/min';
+                    if (type === 'Pain') unit = '/10';
                     setObservationForm({ ...observationForm, type, unit });
-                  }} 
-                  className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  }}
+                  className="w-full rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option>Blood Pressure</option><option>Heart Rate</option><option>Temperature</option><option>Weight</option>
+                  <option>Blood Pressure</option>
+                  <option>Heart Rate</option>
+                  <option>Temperature</option>
+                  <option>Weight</option>
+                  <option value="SpO2">SpO₂</option>
+                  <option>Respiratory rate</option>
+                  <option>Pain</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">Value</label>
-                <input type="text" value={observationForm.value} onChange={e => setObservationForm({...observationForm, value: e.target.value})} className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500" placeholder="E.g. 120/80" />
+                <label className="mb-1 block text-xs font-semibold text-blue-900">Value</label>
+                <input
+                  type="text"
+                  value={observationForm.value}
+                  onChange={(e) => setObservationForm({ ...observationForm, value: e.target.value })}
+                  className="w-full rounded-lg border border-blue-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="E.g. 120/80, 98.6, 72"
+                />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-blue-900 mb-1">Unit</label>
-                <input type="text" disabled value={observationForm.unit} className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm bg-gray-50 text-gray-500" />
+                <label className="mb-1 block text-xs font-semibold text-blue-900">Unit</label>
+                <input
+                  type="text"
+                  disabled
+                  value={observationForm.unit}
+                  className="w-full rounded-lg border border-blue-200 bg-gray-50 px-3 py-2 text-sm text-gray-500"
+                />
               </div>
-              <div className="flex gap-2">
-                <button onClick={() => setIsAddingObservation(false)} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium">Cancel</button>
-                <button onClick={() => handleGenericSubmit('Vitals', () => { setIsAddingObservation(false); setObservationForm({...observationForm, value: ''}); })} disabled={!observationForm.value} className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50">Save</button>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-xs font-semibold text-blue-900">Notes (optional)</label>
+                <textarea
+                  value={observationForm.notes}
+                  onChange={(e) => setObservationForm({ ...observationForm, notes: e.target.value })}
+                  rows={2}
+                  className="w-full resize-none rounded-lg border border-blue-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Context for this reading (optional)"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2 md:col-span-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAddingObservation(false)}
+                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveObservation()}
+                  disabled={!observationForm.value.trim()}
+                  className="flex-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 sm:flex-none"
+                >
+                  Save to record
+                </button>
               </div>
             </div>
           )}
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-             <table className="w-full text-left border-collapse">
-               <thead>
-                 <tr className="bg-slate-50 text-gray-500 text-xs uppercase border-b border-gray-200">
-                   <th className="p-4 font-medium">Date & Time</th>
-                   <th className="p-4 font-medium">Type</th>
-                   <th className="p-4 font-medium">Value</th>
-                   <th className="p-4 font-medium">Recorded By</th>
-                 </tr>
-               </thead>
-               <tbody className="divide-y divide-gray-100 text-sm">
-                 {(resident.observations || []).length === 0 ? (
-                   <tr><td colSpan={4} className="p-8 text-center text-gray-500">No observations recorded.</td></tr>
-                 ) : (resident.observations || []).map((obs: any, i: number) => (
-                   <tr key={i} className="hover:bg-slate-50">
-                     <td className="p-4 text-gray-600">{obs.date} {obs.time}</td>
-                     <td className="p-4"><div className="font-medium text-gray-900 flex items-center"><Activity className="w-4 h-4 mr-2 text-blue-500" />{obs.type}</div></td>
-                     <td className="p-4"><span className="font-bold text-gray-900 text-base">{obs.value}</span><span className="text-gray-500 ml-1 text-xs">{obs.unit}</span></td>
-                     <td className="p-4 text-gray-600">{obs.author}</td>
-                   </tr>
-                 ))}
-               </tbody>
-             </table>
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="border-b border-gray-200 bg-slate-50 text-xs font-medium uppercase tracking-wide text-gray-500">
+                  <th className="p-4">Date & time</th>
+                  <th className="p-4">Type</th>
+                  <th className="p-4">Value</th>
+                  <th className="p-4">Notes</th>
+                  <th className="p-4">Recorded by</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 text-sm">
+                {observationsQueryLoading && displayObservations.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center text-gray-500">
+                      <Loader2 className="mx-auto mb-2 h-6 w-6 animate-spin text-blue-600" aria-hidden />
+                      Loading observations…
+                    </td>
+                  </tr>
+                ) : displayObservations.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center text-gray-500">
+                      No observations recorded.
+                    </td>
+                  </tr>
+                ) : (
+                  displayObservations.map((obs: any) => (
+                    <tr key={obs.id || `${obs.date}-${obs.time}-${obs.type}`} className="hover:bg-slate-50">
+                      <td className="p-4 text-gray-600">
+                        {obs.date} {obs.time}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center font-medium text-gray-900">
+                          <Activity className="mr-2 h-4 w-4 shrink-0 text-blue-500" aria-hidden />
+                          {obs.typeLabel || obs.type}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <span className="text-base font-bold text-gray-900">{obs.value}</span>
+                        {obs.unit ? <span className="ml-1 text-xs text-gray-500">{obs.unit}</span> : null}
+                      </td>
+                      <td className="max-w-xs p-4 text-xs text-gray-600">
+                        {obs.notes ? <span className="line-clamp-3 whitespace-pre-wrap">{obs.notes}</span> : '—'}
+                      </td>
+                      <td className="p-4 text-gray-600">{obs.author}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

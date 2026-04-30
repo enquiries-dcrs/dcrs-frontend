@@ -35,9 +35,13 @@ export interface ResidentDetail {
     assignedToName?: string | null;
   }>;
   observations?: Array<{
+    id?: string;
     type: string;
+    typeLabel?: string;
     value: string;
     unit: string;
+    notes?: string | null;
+    recordedAt?: string;
     time: string;
     date: string;
     author: string;
