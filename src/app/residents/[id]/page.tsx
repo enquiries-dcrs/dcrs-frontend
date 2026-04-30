@@ -1991,8 +1991,11 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
 
   // --- Documents Tab State ---
   const [isUploadingDoc, setIsUploadingDoc] = useState(false);
-  const [documentForm, setDocumentForm] = useState({ fileName: '', text: '' });
-  const [isSummarizingDoc, setIsSummarizingDoc] = useState(false);
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [documentType, setDocumentType] = useState('General');
+  const [documentUploading, setDocumentUploading] = useState(false);
+  const [documentDownloadingId, setDocumentDownloadingId] = useState<string | null>(null);
+  const [documentDeletingId, setDocumentDeletingId] = useState<string | null>(null);
 
   // --- Tasks Tab State ---
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -2098,30 +2101,86 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     }
   };
 
+  const userRole = user?.role as string | undefined;
+  const canUploadDocuments =
+    Boolean(userRole) && ['Senior Carer', 'Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(userRole as string);
+  const canDeleteDocuments =
+    Boolean(userRole) && ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(userRole as string);
+
+  const { data: residentDocumentsData, isLoading: residentDocumentsLoading, isError: residentDocumentsIsError } = useQuery({
+    queryKey: ['resident-documents', resident.id],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${resident.id}/documents`);
+      return data as { documents: Array<any> };
+    },
+  });
+
+  const documents = residentDocumentsData?.documents ?? [];
+
+  const onDocumentFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setDocumentFile(f);
+  };
+
   const handleUploadDocument = async () => {
-    if (!documentForm.fileName) return;
-    setIsSummarizingDoc(true);
+    if (!canUploadDocuments || isReadOnly) return;
+    if (!documentFile) {
+      alert('Choose a file to upload first.');
+      return;
+    }
+    setDocumentUploading(true);
     try {
-      let aiSummary = '';
-      if (documentForm.text) {
-        const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-        const response = await fetch(`${API_BASE_URL}/api/v1/ai/handover`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ notes: `[HOSPITAL DOCUMENT EXTRACT]: ${documentForm.text}\n\nPlease extract any key clinical risks or medication changes.` })
-        });
-        const data = await response.json();
-        if (response.ok) aiSummary = data.summary;
-      }
-      void aiSummary;
-      alert('Document uploaded & analyzed successfully! (Requires DB Endpoint)');
+      const fd = new FormData();
+      fd.append('file', documentFile);
+      fd.append('docType', documentType);
+      await api.post(`/api/v1/residents/${resident.id}/documents`, fd);
       setIsUploadingDoc(false);
-      setDocumentForm({ fileName: '', text: '' });
-    } catch (error) {
-      console.error(error);
-      alert('Failed to process and upload the document.');
+      setDocumentFile(null);
+      setDocumentType('General');
+      await queryClient.invalidateQueries({ queryKey: ['resident-documents', resident.id] });
+    } catch (e) {
+      console.error(e);
+      const msg =
+        typeof e === 'object' &&
+        e !== null &&
+        'response' in e &&
+        typeof (e as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+          ? (e as { response: { data: { error: string } } }).response.data.error
+          : 'Could not upload document.';
+      alert(msg);
     } finally {
-      setIsSummarizingDoc(false);
+      setDocumentUploading(false);
+    }
+  };
+
+  const handleDownloadDocument = async (docId: string) => {
+    setDocumentDownloadingId(docId);
+    try {
+      const { data } = await api.get(`/api/v1/documents/${docId}/download`);
+      if (data?.url) window.open(String(data.url), '_blank', 'noopener,noreferrer');
+      else alert('No download link returned.');
+    } catch (e) {
+      console.error(e);
+      alert('Could not generate download link.');
+    } finally {
+      setDocumentDownloadingId(null);
+    }
+  };
+
+  const handleDeleteDocument = async (docId: string) => {
+    if (!canDeleteDocuments || isReadOnly) return;
+    if (!window.confirm('Delete this document? This removes it from the resident record.')) return;
+    setDocumentDeletingId(docId);
+    try {
+      await api.delete(`/api/v1/documents/${docId}`);
+      await queryClient.invalidateQueries({ queryKey: ['resident-documents', resident.id] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not delete document.');
+    } finally {
+      setDocumentDeletingId(null);
     }
   };
 
@@ -2844,30 +2903,53 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
               <h3 className="text-lg font-semibold text-gray-900">Resident Documents</h3>
               <p className="text-sm text-gray-500">Securely store and manage files linked to this resident.</p>
             </div>
-            {!isReadOnly && (
+            {!isReadOnly && canUploadDocuments && (
               <button onClick={() => setIsUploadingDoc(!isUploadingDoc)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center shadow-sm transition-colors">
                 <FileUp className="w-4 h-4 mr-2" /> Upload Document
               </button>
             )}
           </div>
 
-          {isUploadingDoc && !isReadOnly && (
+          {isUploadingDoc && !isReadOnly && canUploadDocuments && (
             <div className="bg-indigo-50 rounded-xl p-5 border border-indigo-100 flex flex-col gap-4 animate-in fade-in slide-in-from-top-4">
               <div className="flex flex-col sm:flex-row gap-4 items-end">
                 <div className="flex-1 w-full">
-                  <label className="block text-xs font-semibold text-indigo-900 mb-1">Document Name / Description</label>
-                  <input type="text" value={documentForm.fileName} onChange={e => setDocumentForm({...documentForm, fileName: e.target.value})} className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="E.g. Hospital Discharge Plan" />
+                  <label className="block text-xs font-semibold text-indigo-900 mb-1">File</label>
+                  <input
+                    type="file"
+                    onChange={onDocumentFileSelected}
+                    className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                    accept="application/pdf,image/*,text/plain,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  />
+                  {documentFile ? (
+                    <div className="mt-2 text-xs text-indigo-900">
+                      Selected: <span className="font-semibold">{documentFile.name}</span> ({Math.round(documentFile.size / 1024)} KB)
+                    </div>
+                  ) : null}
+                </div>
+                <div className="w-full sm:w-56">
+                  <label className="block text-xs font-semibold text-indigo-900 mb-1">Type</label>
+                  <select
+                    value={documentType}
+                    onChange={(e) => setDocumentType(e.target.value)}
+                    className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  >
+                    <option value="General">General</option>
+                    <option value="Hospital">Hospital</option>
+                    <option value="GP">GP</option>
+                    <option value="DNACPR">DNACPR</option>
+                    <option value="Risk assessment">Risk assessment</option>
+                    <option value="Consent">Consent</option>
+                    <option value="Safeguarding">Safeguarding</option>
+                    <option value="Other">Other</option>
+                  </select>
                 </div>
                 <div className="flex gap-2 w-full sm:w-auto">
                   <button onClick={() => setIsUploadingDoc(false)} className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 flex-1 sm:flex-none transition-colors">Cancel</button>
-                  <button onClick={handleUploadDocument} disabled={isSummarizingDoc || !documentForm.fileName} className="bg-indigo-600 text-white px-6 py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center flex-1 sm:flex-none transition-colors">
-                    {isSummarizingDoc ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />} Analyze & Save
+                  <button onClick={handleUploadDocument} disabled={documentUploading || !documentFile} className="bg-indigo-600 text-white px-6 py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center flex-1 sm:flex-none transition-colors">
+                    {documentUploading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FileUp className="w-4 h-4 mr-2" />} Upload
                   </button>
                 </div>
-              </div>
-              <div className="w-full mt-2">
-                <label className="block text-xs font-semibold text-indigo-900 mb-1 flex items-center"><Sparkles className="w-3.5 h-3.5 mr-1" /> Paste Raw Document Text for AI Extraction (Optional)</label>
-                <textarea value={documentForm.text} onChange={e => setDocumentForm({...documentForm, text: e.target.value})} className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500 h-24 resize-none" placeholder="Paste the contents of the scanned paper assessment here to auto-extract risks and medication changes..." />
               </div>
             </div>
           )}
@@ -2883,20 +2965,48 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                    </tr>
                  </thead>
                  <tbody className="divide-y divide-gray-100 text-sm">
-                   {!(resident as any).documents || (resident as any).documents.length === 0 ? (
+                   {residentDocumentsLoading ? (
+                     <tr><td colSpan={3} className="p-8 text-center text-gray-500">Loading documents…</td></tr>
+                   ) : residentDocumentsIsError ? (
+                     <tr><td colSpan={3} className="p-8 text-center text-rose-600">Could not load documents.</td></tr>
+                   ) : documents.length === 0 ? (
                      <tr><td colSpan={3} className="p-8 text-center text-gray-500">No documents uploaded yet.</td></tr>
-                   ) : (resident as any).documents.map((doc: any) => (
+                   ) : documents.map((doc: any) => (
                      <tr key={doc.id} className="hover:bg-slate-50 transition-colors">
                        <td className="p-4">
-                         <div className="font-medium text-gray-900 flex items-center"><File className={`w-4 h-4 mr-2 ${isReadOnly ? 'text-gray-400' : 'text-indigo-500'}`} />{doc.fileName}</div>
-                         {doc.summary && (
-                           <div className="mt-2 text-xs text-indigo-700 bg-indigo-50/50 p-2.5 rounded border border-indigo-100/50 leading-relaxed max-w-lg">
-                             <span className="font-bold flex items-center mb-1"><Sparkles className="w-3.5 h-3.5 mr-1 text-indigo-500"/> AI Extracted Insights:</span>{doc.summary}
-                           </div>
-                         )}
+                         <div className="font-medium text-gray-900 flex items-center">
+                           <File className={`w-4 h-4 mr-2 ${isReadOnly ? 'text-gray-400' : 'text-indigo-500'}`} />
+                           {doc.file_name || 'Document'}
+                         </div>
+                         <div className="mt-1 text-xs text-gray-500">
+                           {doc.doc_type ? `${doc.doc_type} • ` : ''}
+                           {doc.mime_type || '—'}
+                           {doc.size_bytes != null ? ` • ${Math.round(Number(doc.size_bytes) / 1024)} KB` : ''}
+                         </div>
                        </td>
-                       <td className="p-4 text-gray-600 align-top pt-5">{doc.uploadDate || 'N/A'}</td>
-                       <td className="p-4 text-right align-top pt-5"><button className="text-indigo-600 hover:text-indigo-800 font-medium text-sm">View PDF</button></td>
+                       <td className="p-4 text-gray-600 align-top pt-5">
+                         {doc.uploaded_at ? new Date(doc.uploaded_at).toLocaleString() : '—'}
+                       </td>
+                       <td className="p-4 text-right align-top pt-5">
+                         <div className="flex justify-end gap-2">
+                           <button
+                             onClick={() => handleDownloadDocument(doc.id)}
+                             disabled={documentDownloadingId === doc.id}
+                             className="text-indigo-600 hover:text-indigo-800 font-medium text-sm disabled:opacity-50"
+                           >
+                             {documentDownloadingId === doc.id ? 'Opening…' : 'Download'}
+                           </button>
+                           {!isReadOnly && canDeleteDocuments ? (
+                             <button
+                               onClick={() => handleDeleteDocument(doc.id)}
+                               disabled={documentDeletingId === doc.id}
+                               className="text-rose-600 hover:text-rose-800 font-medium text-sm disabled:opacity-50"
+                             >
+                               {documentDeletingId === doc.id ? 'Deleting…' : 'Delete'}
+                             </button>
+                           ) : null}
+                         </div>
+                       </td>
                      </tr>
                    ))}
                  </tbody>
