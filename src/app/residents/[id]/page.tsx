@@ -1393,23 +1393,139 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
   const [answers, setAnswers] = useState<Record<string, any>>({});
   const [score, setScore] = useState<string>('');
   const [reviewDate, setReviewDate] = useState<string>('');
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
   useEffect(() => {
     setAnswers({});
     setScore('');
     setReviewDate('');
+    setValidationErrors({});
   }, [selectedTemplateId]);
+
+  const computeValidationErrors = (draftAnswers: Record<string, any>) => {
+    if (!selectedTemplate) return {};
+    const errs: Record<string, string> = {};
+    const schemaFields: Array<any> = Array.isArray(selectedTemplate.schema_json?.fields) ? selectedTemplate.schema_json.fields : [];
+    for (const f of schemaFields) {
+      const key = String(f?.key || '').trim();
+      if (!key) continue;
+      const label = String(f?.label || key);
+      const type = String(f?.type || 'text').toLowerCase();
+      const required = Boolean(f?.required);
+      const v = draftAnswers[key];
+      const isEmpty =
+        v === null ||
+        v === undefined ||
+        (typeof v === 'string' && v.trim() === '') ||
+        (type === 'checkbox' && v === false);
+      if (required && isEmpty) {
+        errs[key] = `${label} is required.`;
+        continue;
+      }
+      if (isEmpty) continue;
+      if (type === 'number') {
+        const n = typeof v === 'number' ? v : Number(v);
+        if (!Number.isFinite(n)) {
+          errs[key] = `${label} must be a number.`;
+          continue;
+        }
+        if (f.min != null && Number.isFinite(Number(f.min)) && n < Number(f.min)) {
+          errs[key] = `${label} must be at least ${Number(f.min)}.`;
+          continue;
+        }
+        if (f.max != null && Number.isFinite(Number(f.max)) && n > Number(f.max)) {
+          errs[key] = `${label} must be at most ${Number(f.max)}.`;
+          continue;
+        }
+        continue;
+      }
+      if (type === 'select' && Array.isArray(f.options)) {
+        const allowed = new Set(
+          f.options
+            .map((o: any) => (o && typeof o === 'object' ? String(o.value ?? o.label ?? '') : String(o)))
+            .filter((x: string) => x.trim() !== '')
+        );
+        if (allowed.size > 0 && !allowed.has(String(v))) {
+          errs[key] = `${label} must be one of the allowed options.`;
+          continue;
+        }
+      }
+      const s = typeof v === 'string' ? v : String(v);
+      if (f.minLength != null && Number.isFinite(Number(f.minLength)) && s.length < Number(f.minLength)) {
+        errs[key] = `${label} must be at least ${Number(f.minLength)} characters.`;
+        continue;
+      }
+      if (f.maxLength != null && Number.isFinite(Number(f.maxLength)) && s.length > Number(f.maxLength)) {
+        errs[key] = `${label} must be at most ${Number(f.maxLength)} characters.`;
+        continue;
+      }
+      if (typeof f.pattern === 'string' && f.pattern.trim() !== '') {
+        try {
+          const re = new RegExp(f.pattern);
+          if (!re.test(s)) errs[key] = `${label} is not in the expected format.`;
+        } catch {
+          // ignore invalid pattern
+        }
+      }
+    }
+    return errs;
+  };
+
+  const computeScorePreview = () => {
+    const scoring = selectedTemplate?.scoring_json;
+    if (!scoring || typeof scoring !== 'object') return { score: null as number | null, band: null as string | null };
+    if (String((scoring as any).type || '').toLowerCase() !== 'sum') return { score: null, band: null };
+    const fieldsMap = (scoring as any).fields && typeof (scoring as any).fields === 'object' ? (scoring as any).fields : {};
+    let total = 0;
+    for (const key of Object.keys(fieldsMap)) {
+      const rule = fieldsMap[key];
+      const map = rule?.map && typeof rule.map === 'object' ? rule.map : null;
+      const def = rule?.default != null && Number.isFinite(Number(rule.default)) ? Number(rule.default) : 0;
+      const v = answers[key];
+      if (v === null || v === undefined || v === '') {
+        total += def;
+        continue;
+      }
+      if (map) {
+        const mapped = map[String(v)];
+        total += mapped != null && Number.isFinite(Number(mapped)) ? Number(mapped) : def;
+      } else if (typeof v === 'number' && Number.isFinite(v)) total += v;
+      else if (Number.isFinite(Number(v))) total += Number(v);
+      else total += def;
+    }
+    let band: string | null = null;
+    const bands = Array.isArray((scoring as any).bands) ? (scoring as any).bands : [];
+    for (const b of bands) {
+      const min = b?.min != null && Number.isFinite(Number(b.min)) ? Number(b.min) : null;
+      const max = b?.max != null && Number.isFinite(Number(b.max)) ? Number(b.max) : null;
+      if (min != null && total < min) continue;
+      if (max != null && total > max) continue;
+      if (typeof b?.label === 'string' && b.label.trim()) {
+        band = b.label.trim();
+        break;
+      }
+    }
+    return { score: total, band };
+  };
 
   const [saving, setSaving] = useState(false);
   const saveAssessment = async () => {
     if (!canCreate || isReadOnly) return;
     if (!selectedTemplate) return;
+    const errs = computeValidationErrors(answers);
+    setValidationErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      alert('Please fix validation errors before saving.');
+      return;
+    }
     setSaving(true);
     try {
+      const scoring = selectedTemplate?.scoring_json;
+      const hasScoring = Boolean(scoring && typeof scoring === 'object');
       await api.post(`/api/v1/residents/${residentId}/assessments`, {
         templateId: selectedTemplate.id,
         status: 'COMPLETED',
         answersJson: answers,
-        score: score.trim() === '' ? null : Number(score),
+        score: hasScoring ? null : score.trim() === '' ? null : Number(score),
         reviewDate: reviewDate.trim() || null,
       });
       await queryClient.invalidateQueries({ queryKey: ['assessments', residentId] });
@@ -1432,6 +1548,36 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
     'response' in assessmentsErr &&
     typeof (assessmentsErr as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
       ? (assessmentsErr as { response: { data: { error: string } } }).response.data.error
+      : null;
+
+  const [viewAssessmentId, setViewAssessmentId] = useState<string | null>(null);
+  const [viewOpen, setViewOpen] = useState(false);
+  const {
+    data: assessmentDetail,
+    isLoading: detailLoading,
+    isError: detailIsError,
+    error: detailErr,
+  } = useQuery({
+    queryKey: ['assessment-detail', viewAssessmentId],
+    enabled: Boolean(viewAssessmentId),
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/assessments/${viewAssessmentId}`);
+      return data as { assessment: any };
+    },
+    staleTime: 30_000,
+  });
+
+  const closeDetail = () => {
+    setViewOpen(false);
+    setViewAssessmentId(null);
+  };
+
+  const detailErrMsg =
+    typeof detailErr === 'object' &&
+    detailErr !== null &&
+    'response' in detailErr &&
+    typeof (detailErr as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+      ? (detailErr as { response: { data: { error: string } } }).response.data.error
       : null;
 
   return (
@@ -1492,7 +1638,13 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
                           <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
                           <select
                             value={String(value)}
-                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value }))}
+                            onChange={(e) =>
+                              setAnswers((p) => {
+                                const next = { ...p, [key]: e.target.value };
+                                setValidationErrors(computeValidationErrors(next));
+                                return next;
+                              })
+                            }
                             disabled={!canCreate || isReadOnly}
                             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
                           >
@@ -1503,6 +1655,9 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
                               </option>
                             ))}
                           </select>
+                          {validationErrors[key] ? (
+                            <div className="text-xs text-rose-700 mt-1">{validationErrors[key]}</div>
+                          ) : null}
                         </div>
                       );
                     }
@@ -1512,11 +1667,20 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
                           <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
                           <textarea
                             value={String(value)}
-                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value }))}
+                            onChange={(e) =>
+                              setAnswers((p) => {
+                                const next = { ...p, [key]: e.target.value };
+                                setValidationErrors(computeValidationErrors(next));
+                                return next;
+                              })
+                            }
                             rows={3}
                             disabled={!canCreate || isReadOnly}
                             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
                           />
+                          {validationErrors[key] ? (
+                            <div className="text-xs text-rose-700 mt-1">{validationErrors[key]}</div>
+                          ) : null}
                         </div>
                       );
                     }
@@ -1526,11 +1690,20 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
                           <input
                             type="checkbox"
                             checked={Boolean(value)}
-                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.checked }))}
+                            onChange={(e) =>
+                              setAnswers((p) => {
+                                const next = { ...p, [key]: e.target.checked };
+                                setValidationErrors(computeValidationErrors(next));
+                                return next;
+                              })
+                            }
                             disabled={!canCreate || isReadOnly}
                             className="h-4 w-4"
                           />
                           <span className="font-medium">{label}</span>
+                          {validationErrors[key] ? (
+                            <span className="text-xs text-rose-700 ml-2">{validationErrors[key]}</span>
+                          ) : null}
                         </label>
                       );
                     }
@@ -1541,10 +1714,19 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
                           <input
                             type="number"
                             value={value === '' ? '' : Number(value)}
-                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                            onChange={(e) =>
+                              setAnswers((p) => {
+                                const next = { ...p, [key]: e.target.value === '' ? '' : Number(e.target.value) };
+                                setValidationErrors(computeValidationErrors(next));
+                                return next;
+                              })
+                            }
                             disabled={!canCreate || isReadOnly}
                             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
                           />
+                          {validationErrors[key] ? (
+                            <div className="text-xs text-rose-700 mt-1">{validationErrors[key]}</div>
+                          ) : null}
                         </div>
                       );
                     }
@@ -1553,43 +1735,84 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
                         <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
                         <input
                           value={String(value)}
-                          onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value }))}
+                          onChange={(e) =>
+                            setAnswers((p) => {
+                              const next = { ...p, [key]: e.target.value };
+                              setValidationErrors(computeValidationErrors(next));
+                              return next;
+                            })
+                          }
                           disabled={!canCreate || isReadOnly}
                           className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
                         />
+                        {validationErrors[key] ? (
+                          <div className="text-xs text-rose-700 mt-1">{validationErrors[key]}</div>
+                        ) : null}
                       </div>
                     );
                   })}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-200/60">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 mb-1">Score (optional)</label>
-                      <input
-                        type="number"
-                        value={score}
-                        onChange={(e) => setScore(e.target.value)}
-                        disabled={!canCreate || isReadOnly}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
-                        placeholder="e.g. 2"
-                      />
+                  {selectedTemplate?.scoring_json ? (
+                    <div className="pt-2 border-t border-gray-200/60">
+                      {(() => {
+                        const preview = computeScorePreview();
+                        return (
+                          <div className="text-sm text-gray-700 bg-slate-50 border border-gray-200 rounded-lg px-4 py-3">
+                            <div className="font-semibold text-gray-900">Score (computed)</div>
+                            <div className="text-sm mt-1">
+                              Preview: <span className="font-semibold">{preview.score ?? '—'}</span>
+                              {preview.band ? <span className="ml-2 text-gray-600">({preview.band})</span> : null}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1">
+                              This template has scoring rules. The final score is calculated on save.
+                            </div>
+                          </div>
+                        );
+                      })()}
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1">Review date (optional)</label>
+                          <input
+                            type="date"
+                            value={reviewDate}
+                            onChange={(e) => setReviewDate(e.target.value)}
+                            disabled={!canCreate || isReadOnly}
+                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 mb-1">Review date (optional)</label>
-                      <input
-                        type="date"
-                        value={reviewDate}
-                        onChange={(e) => setReviewDate(e.target.value)}
-                        disabled={!canCreate || isReadOnly}
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
-                      />
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-200/60">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 mb-1">Score (optional)</label>
+                        <input
+                          type="number"
+                          value={score}
+                          onChange={(e) => setScore(e.target.value)}
+                          disabled={!canCreate || isReadOnly}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                          placeholder="e.g. 2"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 mb-1">Review date (optional)</label>
+                        <input
+                          type="date"
+                          value={reviewDate}
+                          onChange={(e) => setReviewDate(e.target.value)}
+                          disabled={!canCreate || isReadOnly}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   <div className="flex justify-end">
                     <button
                       type="button"
                       onClick={() => void saveAssessment()}
-                      disabled={!canCreate || isReadOnly || saving || !selectedTemplateId}
+                      disabled={!canCreate || isReadOnly || saving || !selectedTemplateId || Object.keys(validationErrors).length > 0}
                       className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                     >
                       {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -1615,7 +1838,16 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
             ) : (
               <div className="divide-y divide-gray-100 bg-white">
                 {(assessmentsData?.assessments || []).map((a) => (
-                  <div key={a.id} className="p-4">
+                  <button
+                    type="button"
+                    key={a.id}
+                    onClick={() => {
+                      setViewAssessmentId(a.id);
+                      setViewOpen(true);
+                    }}
+                    className="w-full text-left p-4 hover:bg-slate-50 transition-colors"
+                    title="View assessment details"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-gray-900 truncate">
@@ -1632,13 +1864,95 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
                         </div>
                       ) : null}
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {viewOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="p-5 border-b border-gray-200 bg-slate-50 flex justify-between items-center">
+              <div>
+                <h3 className="font-bold text-lg text-gray-900">Assessment details</h3>
+                <p className="text-xs text-gray-500">Review saved answers and score.</p>
+              </div>
+              <button onClick={closeDetail} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5">
+              {detailLoading ? (
+                <div className="p-6 text-center text-gray-500">Loading…</div>
+              ) : detailIsError ? (
+                <div className="p-4 text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-lg">
+                  {detailErrMsg || 'Could not load assessment.'}
+                </div>
+              ) : (
+                (() => {
+                  const a = assessmentDetail?.assessment;
+                  const schemaFields: Array<any> = Array.isArray(a?.schema_json?.fields) ? a.schema_json.fields : [];
+                  const answersJson = a?.answers_json || {};
+                  return (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="font-semibold text-gray-900">{a?.template_name}</span>
+                        <span className="text-gray-500">v{a?.template_version}</span>
+                        {a?.score != null ? (
+                          <span className="ml-auto text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1">
+                            Score: {a.score}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {a?.created_at ? new Date(a.created_at).toLocaleString() : '—'}
+                        {a?.review_date ? ` • Review ${new Date(a.review_date).toLocaleDateString()}` : ''}
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 overflow-hidden">
+                        <div className="divide-y divide-gray-100">
+                          {schemaFields.length === 0 ? (
+                            <div className="p-5 text-sm text-gray-600">No schema fields found for this template.</div>
+                          ) : (
+                            schemaFields.map((f) => {
+                              const key = String(f?.key || '').trim();
+                              if (!key) return null;
+                              const label = String(f?.label || key);
+                              const v = answersJson[key];
+                              const display =
+                                typeof v === 'boolean' ? (v ? 'Yes' : 'No') : v == null || v === '' ? '—' : String(v);
+                              return (
+                                <div key={key} className="p-4">
+                                  <div className="text-xs font-semibold text-gray-600">{label}</div>
+                                  <div className="text-sm text-gray-900 mt-1 whitespace-pre-wrap">{display}</div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+
+            <div className="p-4 border-t border-gray-200 flex justify-end bg-slate-50">
+              <button
+                type="button"
+                onClick={closeDetail}
+                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
