@@ -27,6 +27,27 @@
    const [isSubmitting, setIsSubmitting] = useState(false);
    const [resettingUserId, setResettingUserId] = useState<string | null>(null);
    const [deactivatingUserId, setDeactivatingUserId] = useState<string | null>(null);
+  const [isTemplatesModalOpen, setIsTemplatesModalOpen] = useState(false);
+  const [templateDraftName, setTemplateDraftName] = useState('');
+  const [templateDraftJson, setTemplateDraftJson] = useState(
+    JSON.stringify(
+      {
+        fields: [
+          { key: 'risk', label: 'Overall risk', type: 'select', options: ['Low', 'Medium', 'High'] },
+          { key: 'notes', label: 'Notes', type: 'textarea' },
+        ],
+      },
+      null,
+      2
+    )
+  );
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState<string>('');
+  const [editTemplateName, setEditTemplateName] = useState('');
+  const [editTemplateJson, setEditTemplateJson] = useState('');
+  const [editTemplateActive, setEditTemplateActive] = useState(true);
+  const [editTemplateBumpVersion, setEditTemplateBumpVersion] = useState(true);
+  const [savingTemplate, setSavingTemplate] = useState(false);
    const [inviteForm, setInviteForm] = useState({
      email: '',
      firstName: '',
@@ -213,6 +234,94 @@
        setResettingUserId(null);
      }
    };
+
+  const { data: templatesData, isLoading: templatesLoading, isError: templatesIsError, error: templatesQueryError } =
+    useQuery({
+      queryKey: ['assessment-templates-admin'],
+      queryFn: async () => {
+        const { data } = await api.get('/api/v1/assessment-templates');
+        return data as {
+          templates: Array<{
+            id: string;
+            name: string;
+            version: number;
+            is_active: boolean;
+            schema_json: any;
+            updated_at: string;
+          }>;
+        };
+      },
+      staleTime: 30_000,
+    });
+
+  const templatesErrMsg =
+    templatesQueryError && typeof templatesQueryError === 'object' && 'response' in templatesQueryError
+      ? (templatesQueryError as { response?: { data?: { error?: string } } }).response?.data?.error
+      : null;
+
+  const createTemplate = async () => {
+    const name = templateDraftName.trim();
+    if (!name) return;
+    let schema: any = null;
+    try {
+      schema = JSON.parse(templateDraftJson);
+    } catch {
+      alert('Template schema must be valid JSON.');
+      return;
+    }
+    setCreatingTemplate(true);
+    try {
+      await api.post('/api/v1/assessment-templates', { name, schemaJson: schema });
+      setTemplateDraftName('');
+      await queryClient.invalidateQueries({ queryKey: ['assessment-templates-admin'] });
+      alert('Template created.');
+    } catch (e) {
+      console.error(e);
+      alert('Could not create template. Check your permissions.');
+    } finally {
+      setCreatingTemplate(false);
+    }
+  };
+
+  useEffect(() => {
+    const list = templatesData?.templates || [];
+    if (!editingTemplateId) return;
+    const t = list.find((x) => x.id === editingTemplateId);
+    if (!t) return;
+    setEditTemplateName(t.name || '');
+    setEditTemplateJson(JSON.stringify(t.schema_json ?? { fields: [] }, null, 2));
+    setEditTemplateActive(Boolean(t.is_active));
+    setEditTemplateBumpVersion(true);
+  }, [editingTemplateId, templatesData?.templates]);
+
+  const saveTemplateEdits = async () => {
+    if (!editingTemplateId) return;
+    const name = editTemplateName.trim();
+    if (!name) return;
+    let schema: any = null;
+    try {
+      schema = JSON.parse(editTemplateJson);
+    } catch {
+      alert('Template schema must be valid JSON.');
+      return;
+    }
+    setSavingTemplate(true);
+    try {
+      await api.patch(`/api/v1/assessment-templates/${editingTemplateId}`, {
+        name,
+        schemaJson: schema,
+        isActive: editTemplateActive,
+        bumpVersion: editTemplateBumpVersion,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['assessment-templates-admin'] });
+      alert('Template updated.');
+    } catch (e) {
+      console.error(e);
+      alert('Could not update template. Check your permissions.');
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
 
    return (
      <div className="p-6 max-w-6xl mx-auto space-y-6 animate-in fade-in pb-20">
@@ -577,12 +686,195 @@
              <p className="text-sm text-gray-600 mb-4 leading-relaxed">
                Use the template builder to modify standard assessments like MUST, Waterlow, and daily care routines to fit your organization's specific policies.
              </p>
-             <button className="text-amber-600 hover:text-amber-800 font-medium text-sm flex items-center transition-colors">
-               Launch Template Builder &rarr;
+            <button
+              type="button"
+              onClick={() => setIsTemplatesModalOpen(true)}
+              className="text-amber-600 hover:text-amber-800 font-medium text-sm flex items-center transition-colors"
+            >
+              Manage assessment templates &rarr;
              </button>
            </div>
          </div>
        </div>
+
+      {/* Assessment Templates Modal */}
+      {isTemplatesModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="p-5 border-b border-gray-200 bg-slate-50 flex justify-between items-center">
+              <div>
+                <h3 className="font-bold text-lg text-gray-900">Assessment templates</h3>
+                <p className="text-xs text-gray-500">
+                  V1 uses a JSON schema. Create templates for MUST, falls risk, Waterlow, etc.
+                </p>
+              </div>
+              <button onClick={() => setIsTemplatesModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="space-y-3">
+                <h4 className="text-sm font-bold text-gray-900">Create template</h4>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Name</label>
+                  <input
+                    value={templateDraftName}
+                    onChange={(e) => setTemplateDraftName(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="e.g. MUST (Malnutrition)"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">Schema JSON</label>
+                  <textarea
+                    value={templateDraftJson}
+                    onChange={(e) => setTemplateDraftJson(e.target.value)}
+                    rows={12}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Format: {'{'} fields: [{'{' } key, label, type, options? {'}'}] {'}'}
+                  </p>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => void createTemplate()}
+                    disabled={creatingTemplate || !templateDraftName.trim()}
+                    className="inline-flex items-center rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {creatingTemplate ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                    Create
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="text-sm font-bold text-gray-900">Existing templates</h4>
+                {templatesLoading ? (
+                  <div className="p-6 text-center text-gray-500">Loading templates…</div>
+                ) : templatesIsError ? (
+                  <div className="p-4 text-sm text-rose-700 bg-rose-50 border border-rose-100 rounded-lg">
+                    {templatesErrMsg || 'Could not load templates.'}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-gray-200 overflow-hidden">
+                      <div className="divide-y divide-gray-100">
+                        {(templatesData?.templates || []).length === 0 ? (
+                          <div className="p-5 text-sm text-gray-500">No templates yet.</div>
+                        ) : (
+                          (templatesData?.templates || []).map((t) => (
+                            <button
+                              type="button"
+                              key={t.id}
+                              onClick={() => setEditingTemplateId(t.id)}
+                              className={`w-full text-left p-4 hover:bg-slate-50 transition-colors ${
+                                editingTemplateId === t.id ? 'bg-blue-50/40' : 'bg-white'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-gray-900 text-sm truncate">
+                                    {t.name}{' '}
+                                    <span className="text-xs font-medium text-gray-500">(v{t.version})</span>
+                                  </div>
+                                  <div className="text-xs text-gray-500 mt-1">
+                                    {t.is_active ? 'Active' : 'Inactive'} • Updated{' '}
+                                    {t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}
+                                  </div>
+                                </div>
+                                <span className="text-xs font-medium text-blue-700">Edit</span>
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+
+                    {editingTemplateId ? (
+                      <div className="rounded-lg border border-gray-200 overflow-hidden">
+                        <div className="p-4 border-b border-gray-200 bg-white">
+                          <div className="text-sm font-semibold text-gray-900">Edit selected template</div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            Changes require Deputy Manager or Home Manager access.
+                          </div>
+                        </div>
+                        <div className="p-4 space-y-3 bg-slate-50/30">
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-600 mb-1">Name</label>
+                            <input
+                              value={editTemplateName}
+                              onChange={(e) => setEditTemplateName(e.target.value)}
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div className="flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+                            <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={editTemplateActive}
+                                onChange={(e) => setEditTemplateActive(e.target.checked)}
+                              />
+                              Active
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={editTemplateBumpVersion}
+                                onChange={(e) => setEditTemplateBumpVersion(e.target.checked)}
+                              />
+                              Bump version on save
+                            </label>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-600 mb-1">Schema JSON</label>
+                            <textarea
+                              value={editTemplateJson}
+                              onChange={(e) => setEditTemplateJson(e.target.value)}
+                              rows={10}
+                              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditingTemplateId('')}
+                              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                            >
+                              Clear selection
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void saveTemplateEdits()}
+                              disabled={savingTemplate || !editTemplateName.trim()}
+                              className="inline-flex items-center rounded-lg bg-slate-800 px-5 py-2 text-sm font-medium text-white hover:bg-slate-900 disabled:opacity-50"
+                            >
+                              {savingTemplate ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                              Save changes
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-gray-200 flex justify-end bg-slate-50">
+              <button
+                type="button"
+                onClick={() => setIsTemplatesModalOpen(false)}
+                className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
        {/* Invite Staff Modal */}
        {isInviteModalOpen && (

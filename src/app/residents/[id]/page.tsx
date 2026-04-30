@@ -1351,6 +1351,298 @@ function CarePlanTab({
   );
 }
 
+function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isReadOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const userRole = useGlobalStore((s) => (s.user?.role as string | undefined) || undefined);
+  const canCreate = Boolean(userRole) && ['Senior Carer', 'Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(userRole as string);
+
+  const { data: templateData, isLoading: templatesLoading } = useQuery({
+    queryKey: ['assessment-templates'],
+    queryFn: async () => {
+      const { data } = await api.get('/api/v1/assessment-templates');
+      return data as { templates: Array<{ id: string; name: string; version: number; schema_json: any; is_active: boolean }> };
+    },
+    staleTime: 30_000,
+  });
+
+  const { data: assessmentsData, isLoading: assessmentsLoading, isError: assessmentsError, error: assessmentsErr } = useQuery({
+    queryKey: ['assessments', residentId],
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/assessments`);
+      return data as {
+        assessments: Array<{
+          id: string;
+          template_id: string;
+          template_name: string;
+          template_version: number;
+          created_at: string;
+          score: number | null;
+          review_date: string | null;
+          answers_json: any;
+        }>;
+      };
+    },
+    staleTime: 15_000,
+  });
+
+  const templates = (templateData?.templates || []).filter((t) => t.is_active);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) || null;
+
+  const fields: Array<any> = Array.isArray(selectedTemplate?.schema_json?.fields) ? selectedTemplate!.schema_json.fields : [];
+  const [answers, setAnswers] = useState<Record<string, any>>({});
+  const [score, setScore] = useState<string>('');
+  const [reviewDate, setReviewDate] = useState<string>('');
+  useEffect(() => {
+    setAnswers({});
+    setScore('');
+    setReviewDate('');
+  }, [selectedTemplateId]);
+
+  const [saving, setSaving] = useState(false);
+  const saveAssessment = async () => {
+    if (!canCreate || isReadOnly) return;
+    if (!selectedTemplate) return;
+    setSaving(true);
+    try {
+      await api.post(`/api/v1/residents/${residentId}/assessments`, {
+        templateId: selectedTemplate.id,
+        status: 'COMPLETED',
+        answersJson: answers,
+        score: score.trim() === '' ? null : Number(score),
+        reviewDate: reviewDate.trim() || null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['assessments', residentId] });
+      setSelectedTemplateId('');
+      setAnswers({});
+      setScore('');
+      setReviewDate('');
+      alert('Assessment saved.');
+    } catch (e) {
+      console.error(e);
+      alert('Could not save assessment.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const errMsg =
+    typeof assessmentsErr === 'object' &&
+    assessmentsErr !== null &&
+    'response' in assessmentsErr &&
+    typeof (assessmentsErr as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+      ? (assessmentsErr as { response: { data: { error: string } } }).response.data.error
+      : null;
+
+  return (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-5 border-b border-gray-200 bg-slate-50">
+          <h3 className="text-lg font-semibold text-gray-900">Assessments</h3>
+          <p className="text-sm text-gray-600 mt-1">Complete and review structured assessments for this resident.</p>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {!canCreate ? (
+            <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+              Your role can view assessments but cannot create them.
+            </div>
+          ) : null}
+
+          <div className="rounded-lg border border-gray-200 overflow-hidden">
+            <div className="p-4 border-b border-gray-200 bg-white">
+              <div className="text-sm font-semibold text-gray-900">New assessment</div>
+              <div className="text-xs text-gray-500 mt-1">Select a template and complete the form.</div>
+            </div>
+            <div className="p-4 space-y-4 bg-slate-50/30">
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Template</label>
+                <select
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
+                  disabled={!canCreate || isReadOnly || templatesLoading}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                >
+                  <option value="">{templatesLoading ? 'Loading templates…' : 'Select a template'}</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} (v{t.version})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedTemplate ? (
+                <div className="space-y-3">
+                  {fields.length === 0 ? (
+                    <div className="text-sm text-gray-600">
+                      This template has no fields. Edit its schema in Admin Settings.
+                    </div>
+                  ) : null}
+                  {fields.map((f) => {
+                    const key = String(f.key || '');
+                    const label = String(f.label || key || 'Field');
+                    const type = String(f.type || 'text');
+                    const value = answers[key] ?? (type === 'checkbox' ? false : '');
+
+                    if (!key) return null;
+                    if (type === 'select' && Array.isArray(f.options)) {
+                      return (
+                        <div key={key}>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
+                          <select
+                            value={String(value)}
+                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value }))}
+                            disabled={!canCreate || isReadOnly}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                          >
+                            <option value="">Select…</option>
+                            {f.options.map((o: any) => (
+                              <option key={String(o.value ?? o)} value={String(o.value ?? o)}>
+                                {String(o.label ?? o.value ?? o)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    }
+                    if (type === 'textarea') {
+                      return (
+                        <div key={key}>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
+                          <textarea
+                            value={String(value)}
+                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value }))}
+                            rows={3}
+                            disabled={!canCreate || isReadOnly}
+                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                          />
+                        </div>
+                      );
+                    }
+                    if (type === 'checkbox') {
+                      return (
+                        <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(value)}
+                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.checked }))}
+                            disabled={!canCreate || isReadOnly}
+                            className="h-4 w-4"
+                          />
+                          <span className="font-medium">{label}</span>
+                        </label>
+                      );
+                    }
+                    if (type === 'number') {
+                      return (
+                        <div key={key}>
+                          <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
+                          <input
+                            type="number"
+                            value={value === '' ? '' : Number(value)}
+                            onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value === '' ? '' : Number(e.target.value) }))}
+                            disabled={!canCreate || isReadOnly}
+                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                          />
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={key}>
+                        <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
+                        <input
+                          value={String(value)}
+                          onChange={(e) => setAnswers((p) => ({ ...p, [key]: e.target.value }))}
+                          disabled={!canCreate || isReadOnly}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                        />
+                      </div>
+                    );
+                  })}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-200/60">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Score (optional)</label>
+                      <input
+                        type="number"
+                        value={score}
+                        onChange={(e) => setScore(e.target.value)}
+                        disabled={!canCreate || isReadOnly}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                        placeholder="e.g. 2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Review date (optional)</label>
+                      <input
+                        type="date"
+                        value={reviewDate}
+                        onChange={(e) => setReviewDate(e.target.value)}
+                        disabled={!canCreate || isReadOnly}
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void saveAssessment()}
+                      disabled={!canCreate || isReadOnly || saving || !selectedTemplateId}
+                      className="inline-flex items-center rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Save assessment
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-200 overflow-hidden">
+            <div className="p-4 border-b border-gray-200 bg-white">
+              <div className="text-sm font-semibold text-gray-900">History</div>
+              <div className="text-xs text-gray-500 mt-1">Most recent assessments first.</div>
+            </div>
+            {assessmentsLoading ? (
+              <div className="p-6 text-center text-gray-500">Loading assessments…</div>
+            ) : assessmentsError ? (
+              <div className="p-6 text-center text-rose-700 bg-rose-50/40">{errMsg || 'Could not load assessments.'}</div>
+            ) : (assessmentsData?.assessments || []).length === 0 ? (
+              <div className="p-6 text-center text-gray-500">No assessments recorded yet.</div>
+            ) : (
+              <div className="divide-y divide-gray-100 bg-white">
+                {(assessmentsData?.assessments || []).map((a) => (
+                  <div key={a.id} className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-gray-900 truncate">
+                          {a.template_name} <span className="text-xs font-medium text-gray-500">(v{a.template_version})</span>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {a.created_at ? new Date(a.created_at).toLocaleString() : '—'}
+                          {a.review_date ? ` • Review ${new Date(a.review_date).toLocaleDateString()}` : ''}
+                        </div>
+                      </div>
+                      {a.score != null ? (
+                        <div className="shrink-0 text-xs font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded-full px-2.5 py-1">
+                          Score: {a.score}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ResidentProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = React.use(params);
   const router = useRouter();
@@ -1432,7 +1724,7 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   }
 
   const isReadOnly = resident.status === 'ARCHIVED';
-  const tabs = ['Overview', 'Care plan', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
+  const tabs = ['Overview', 'Care plan', 'Assessments', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
@@ -1843,6 +2135,11 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
           isReadOnly={isReadOnly}
           onTaskCreated={() => setActiveTab('Tasks')}
         />
+      )}
+
+      {/* --- TAB: ASSESSMENTS --- */}
+      {activeTab === 'Assessments' && (
+        <AssessmentsTab residentId={resident.id} isReadOnly={isReadOnly} />
       )}
 
       {/* --- TAB: TASKS --- */}
