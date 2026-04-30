@@ -827,6 +827,7 @@ function CarePlanTab({
   const selectedPlan = selectedPlanId ? plans.find((p) => p.id === selectedPlanId) ?? null : null;
 
   const [newPlanTitle, setNewPlanTitle] = useState('Care plan');
+  const [newPlanStatus, setNewPlanStatus] = useState<'DRAFT' | 'ACTIVE'>('ACTIVE');
   const [creatingPlan, setCreatingPlan] = useState(false);
   const createPlan = async () => {
     if (!canEdit || isReadOnly) return;
@@ -834,9 +835,10 @@ function CarePlanTab({
     if (!title) return;
     setCreatingPlan(true);
     try {
-      await api.post(`/api/v1/residents/${residentId}/care-plans`, { title, status: 'ACTIVE' });
+      await api.post(`/api/v1/residents/${residentId}/care-plans`, { title, status: newPlanStatus });
       await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
       setNewPlanTitle('Care plan');
+      setNewPlanStatus('ACTIVE');
     } catch (e) {
       console.error(e);
       alert('Could not create care plan. Check permissions and that the DB migration has been applied.');
@@ -908,6 +910,22 @@ function CarePlanTab({
     }
   };
 
+  const renamePlan = async () => {
+    if (!selectedPlan || !canEdit || isReadOnly) return;
+    if (selectedPlan.status === 'ARCHIVED') return;
+    const next = window.prompt('Rename care plan', selectedPlan.title);
+    if (next == null) return;
+    const title = next.trim();
+    if (!title) return;
+    try {
+      await api.patch(`/api/v1/care-plans/${selectedPlan.id}`, { title });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not rename care plan.');
+    }
+  };
+
   const [creatingTaskGoalId, setCreatingTaskGoalId] = useState<string | null>(null);
   const createTaskFromGoal = async (goalId: string, goalTextValue: string) => {
     if (!canEdit || isReadOnly) return;
@@ -926,6 +944,49 @@ function CarePlanTab({
       alert('Could not create task from goal.');
     } finally {
       setCreatingTaskGoalId(null);
+    }
+  };
+
+  const editGoal = async (goalId: string, currentText: string, currentTargetDate: string | null) => {
+    if (!selectedPlan || !canEdit || isReadOnly) return;
+    if (selectedPlan.status === 'ARCHIVED') return;
+
+    const nextText = window.prompt('Edit goal text', currentText);
+    if (nextText == null) return;
+    const goalTextNext = nextText.trim();
+    if (!goalTextNext) return;
+
+    const currentTarget = currentTargetDate ? String(currentTargetDate).slice(0, 10) : '';
+    const nextTarget = window.prompt('Target date (YYYY-MM-DD) — leave blank to clear', currentTarget);
+    if (nextTarget == null) return;
+    const cleaned = nextTarget.trim();
+    if (cleaned !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) {
+      alert('Target date must be YYYY-MM-DD (or blank).');
+      return;
+    }
+
+    try {
+      await api.patch(`/api/v1/care-plans/${selectedPlan.id}/goals/${goalId}`, {
+        goalText: goalTextNext,
+        targetDate: cleaned === '' ? null : cleaned,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not update goal.');
+    }
+  };
+
+  const deleteGoal = async (goalId: string) => {
+    if (!selectedPlan || !canEdit || isReadOnly) return;
+    if (selectedPlan.status === 'ARCHIVED') return;
+    if (!window.confirm('Delete this goal?')) return;
+    try {
+      await api.delete(`/api/v1/care-plans/${selectedPlan.id}/goals/${goalId}`);
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+    } catch (e) {
+      console.error(e);
+      alert('Could not delete goal.');
     }
   };
 
@@ -948,11 +1009,21 @@ function CarePlanTab({
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {activePlan && canArchive ? (
+            {selectedPlan && canEdit ? (
+              <button
+                type="button"
+                onClick={renamePlan}
+                disabled={isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Rename
+              </button>
+            ) : null}
+            {selectedPlan && canArchive ? (
               <button
                 type="button"
                 onClick={archivePlan}
-                disabled={isReadOnly || activePlan.status === 'ARCHIVED'}
+                disabled={isReadOnly || selectedPlan.status === 'ARCHIVED'}
                 className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 Archive
@@ -982,6 +1053,18 @@ function CarePlanTab({
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
                 />
               </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Create as</label>
+                <select
+                  value={newPlanStatus}
+                  onChange={(e) => setNewPlanStatus(e.target.value === 'DRAFT' ? 'DRAFT' : 'ACTIVE')}
+                  disabled={!canEdit || isReadOnly}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                >
+                  <option value="ACTIVE">Active (archives other active plan)</option>
+                  <option value="DRAFT">Draft</option>
+                </select>
+              </div>
               <button
                 type="button"
                 onClick={createPlan}
@@ -995,6 +1078,15 @@ function CarePlanTab({
           </div>
         ) : (
           <div className="p-5 space-y-5">
+            {!canEdit ? (
+              <div className="text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                You can view care plans, but your role cannot edit them. Ask a Senior Carer or manager.
+              </div>
+            ) : selectedPlan.status === 'ARCHIVED' ? (
+              <div className="text-sm text-gray-700 bg-slate-50 border border-gray-200 rounded-lg px-4 py-3">
+                This plan is archived and read-only. Select another plan or create a new draft.
+              </div>
+            ) : null}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold text-gray-900">
@@ -1098,6 +1190,22 @@ function CarePlanTab({
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => editGoal(g.id, g.goal_text, g.target_date)}
+                          disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                          className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteGoal(g.id)}
+                          disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                        >
+                          Delete
+                        </button>
                         <button
                           type="button"
                           onClick={() => createTaskFromGoal(g.id, g.goal_text)}
