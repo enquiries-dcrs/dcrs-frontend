@@ -799,13 +799,25 @@ function CarePlanTab({
           status: 'DRAFT' | 'ACTIVE' | 'ARCHIVED';
           created_at: string;
           updated_at: string;
+          created_by_name?: string | null;
+          updated_by_name?: string | null;
           goals: Array<{
             id: string;
             care_plan_id: string;
             goal_text: string;
             target_date: string | null;
             status: 'OPEN' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
+            created_at?: string;
             updated_at: string;
+            created_by_name?: string | null;
+            updated_by_name?: string | null;
+            linkedTasks?: Array<{
+              id: string;
+              title: string;
+              status: string;
+              priority: string;
+              dueDate: string | null;
+            }>;
           }>;
         }>;
       };
@@ -933,12 +945,11 @@ function CarePlanTab({
     if (!title) return;
     setCreatingTaskGoalId(goalId);
     try {
-      await api.post(`/api/v1/residents/${residentId}/tasks`, {
-        title: title.length > 180 ? `${title.slice(0, 177)}…` : title,
-        priority: 'Normal',
-      });
+      if (!selectedPlan) throw new Error('No selected plan');
+      await api.post(`/api/v1/care-plans/${selectedPlan.id}/goals/${goalId}/tasks`, { priority: 'Normal' });
       if (typeof onTaskCreated === 'function') onTaskCreated();
       await queryClient.invalidateQueries({ queryKey: ['resident', residentId] });
+      await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
     } catch (e) {
       console.error(e);
       alert('Could not create task from goal.');
@@ -947,33 +958,48 @@ function CarePlanTab({
     }
   };
 
-  const editGoal = async (goalId: string, currentText: string, currentTargetDate: string | null) => {
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [editGoalText, setEditGoalText] = useState('');
+  const [editGoalTarget, setEditGoalTarget] = useState('');
+  const [savingGoalId, setSavingGoalId] = useState<string | null>(null);
+
+  const startEditGoal = (goalId: string, currentText: string, currentTargetDate: string | null) => {
+    setEditingGoalId(goalId);
+    setEditGoalText(currentText || '');
+    setEditGoalTarget(currentTargetDate ? String(currentTargetDate).slice(0, 10) : '');
+  };
+
+  const cancelEditGoal = () => {
+    setEditingGoalId(null);
+    setEditGoalText('');
+    setEditGoalTarget('');
+  };
+
+  const saveGoalEdit = async (goalId: string) => {
     if (!selectedPlan || !canEdit || isReadOnly) return;
     if (selectedPlan.status === 'ARCHIVED') return;
 
-    const nextText = window.prompt('Edit goal text', currentText);
-    if (nextText == null) return;
-    const goalTextNext = nextText.trim();
+    const goalTextNext = editGoalText.trim();
     if (!goalTextNext) return;
-
-    const currentTarget = currentTargetDate ? String(currentTargetDate).slice(0, 10) : '';
-    const nextTarget = window.prompt('Target date (YYYY-MM-DD) — leave blank to clear', currentTarget);
-    if (nextTarget == null) return;
-    const cleaned = nextTarget.trim();
+    const cleaned = editGoalTarget.trim();
     if (cleaned !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) {
       alert('Target date must be YYYY-MM-DD (or blank).');
       return;
     }
 
+    setSavingGoalId(goalId);
     try {
       await api.patch(`/api/v1/care-plans/${selectedPlan.id}/goals/${goalId}`, {
         goalText: goalTextNext,
         targetDate: cleaned === '' ? null : cleaned,
       });
       await queryClient.invalidateQueries({ queryKey: ['care-plans', residentId] });
+      cancelEditGoal();
     } catch (e) {
       console.error(e);
       alert('Could not update goal.');
+    } finally {
+      setSavingGoalId(null);
     }
   };
 
@@ -1095,6 +1121,9 @@ function CarePlanTab({
                 </div>
                 <div className="text-xs text-gray-500">
                   Updated {selectedPlan.updated_at ? new Date(selectedPlan.updated_at).toLocaleString() : '—'}
+                  {selectedPlan.updated_by_name ? (
+                    <span className="ml-2">by {selectedPlan.updated_by_name}</span>
+                  ) : null}
                 </div>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
@@ -1181,22 +1210,99 @@ function CarePlanTab({
                   (selectedPlan.goals || []).map((g) => (
                     <div key={g.id} className="p-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                       <div className="flex-1">
-                        <div className="text-sm font-medium text-gray-900">{g.goal_text}</div>
+                        {editingGoalId === g.id ? (
+                          <div className="space-y-2">
+                            <label className="block text-xs font-semibold text-gray-600">Goal</label>
+                            <textarea
+                              value={editGoalText}
+                              onChange={(e) => setEditGoalText(e.target.value)}
+                              rows={3}
+                              disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED' || savingGoalId === g.id}
+                              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                            />
+                            <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+                              <div>
+                                <label className="block text-xs font-semibold text-gray-600 mb-1">Target date (optional)</label>
+                                <input
+                                  type="date"
+                                  value={editGoalTarget}
+                                  onChange={(e) => setEditGoalTarget(e.target.value)}
+                                  disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED' || savingGoalId === g.id}
+                                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-gray-600"
+                                />
+                              </div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void saveGoalEdit(g.id)}
+                                  disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED' || savingGoalId === g.id || !editGoalText.trim()}
+                                  className="inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                                >
+                                  {savingGoalId === g.id ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={cancelEditGoal}
+                                  disabled={savingGoalId === g.id}
+                                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-sm font-medium text-gray-900">{g.goal_text}</div>
+                        )}
                         <div className="text-xs text-gray-500 mt-1">
                           Status: <span className="font-semibold text-gray-700">{g.status}</span>
                           {g.target_date ? (
                             <span className="ml-2">Target: {new Date(g.target_date).toLocaleDateString()}</span>
                           ) : null}
+                          {g.updated_at ? (
+                            <span className="ml-2">
+                              • Updated {new Date(g.updated_at).toLocaleString()}
+                              {g.updated_by_name ? ` by ${g.updated_by_name}` : ''}
+                            </span>
+                          ) : null}
                         </div>
+                        {g.created_at || g.created_by_name ? (
+                          <div className="text-[11px] text-gray-400 mt-1">
+                            {g.created_at ? `Created ${new Date(g.created_at).toLocaleString()}` : 'Created'}
+                            {g.created_by_name ? ` by ${g.created_by_name}` : ''}
+                          </div>
+                        ) : null}
+                        {(g.linkedTasks || []).length > 0 ? (
+                          <div className="mt-2 rounded-lg border border-gray-200 bg-white">
+                            <div className="px-3 py-2 border-b border-gray-200 text-xs font-semibold text-gray-700">
+                              Linked tasks
+                            </div>
+                            <div className="divide-y divide-gray-100">
+                              {(g.linkedTasks || []).map((t) => (
+                                <div key={t.id} className="px-3 py-2 text-xs text-gray-700 flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="truncate font-medium text-gray-900">{t.title}</div>
+                                    <div className="text-[11px] text-gray-500">
+                                      {t.status}
+                                      {t.dueDate ? ` • Due ${t.dueDate}` : ''}
+                                    </div>
+                                  </div>
+                                  <div className="shrink-0 text-[11px] text-gray-500">{t.priority}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() => editGoal(g.id, g.goal_text, g.target_date)}
-                          disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED'}
+                          onClick={() => startEditGoal(g.id, g.goal_text, g.target_date)}
+                          disabled={!canEdit || isReadOnly || selectedPlan.status === 'ARCHIVED' || (editingGoalId !== null && editingGoalId !== g.id)}
                           className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                         >
-                          Edit
+                          {editingGoalId === g.id ? 'Editing…' : 'Edit'}
                         </button>
                         <button
                           type="button"
