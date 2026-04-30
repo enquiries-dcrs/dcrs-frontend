@@ -8,7 +8,8 @@ import { api } from '@/lib/api';
 import { 
   ArrowLeft, MapPin, UserCircle, Loader2, X, FileUp, File, Sparkles, 
   FileText, Mail, Globe, AlertCircle, Plus, CheckCircle2, AlertTriangle, 
-  Mic, Activity, TrendingUp, ShieldAlert, GitMerge, Hospital, QrCode, Clock, Package, Camera
+  Mic, Activity, TrendingUp, ShieldAlert, GitMerge, Hospital, QrCode, Clock, Package, Camera,
+  Download,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
@@ -2205,6 +2206,9 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
 
   const isReadOnly = resident.status === 'ARCHIVED';
   const canAssignTasks = Boolean(user?.role) && TASK_ASSIGN_ROLES.has(user.role as string);
+  const canExportResident =
+    Boolean(user?.role) &&
+    ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(user.role as string);
   const tabs = ['Overview', 'Care plan', 'Assessments', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
@@ -2347,6 +2351,34 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       alert('Could not delete document.');
     } finally {
       setDocumentDeletingId(null);
+    }
+  };
+
+  const downloadResidentCsv = async (exportType: 'timeline' | 'documents') => {
+    try {
+      const { data } = await api.get(`/api/v1/residents/${resident.id}/export.csv`, {
+        params: { type: exportType },
+        responseType: 'blob',
+      });
+      const blob = new Blob([data], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `resident-${resident.id}-${exportType}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+      const msg =
+        typeof e === 'object' &&
+        e !== null &&
+        'response' in e &&
+        typeof (e as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+          ? (e as { response: { data: { error: string } } }).response.data.error
+          : 'Could not download export.';
+      alert(msg);
     }
   };
 
@@ -2617,6 +2649,28 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
             >
               {resident.status === 'PENDING' ? 'Admit' : 'Readmit'}
             </button>
+          )}
+          {canExportResident && (
+            <>
+              <button
+                type="button"
+                onClick={() => void downloadResidentCsv('timeline')}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition-colors hover:bg-slate-50"
+                title="Download tasks, notes, observations, assessments, documents metadata, and daily charts as CSV"
+              >
+                <Download className="h-4 w-4 shrink-0" aria-hidden />
+                Export timeline CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => void downloadResidentCsv('documents')}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 shadow-sm transition-colors hover:bg-slate-50"
+                title="Download resident document metadata as CSV"
+              >
+                <Download className="h-4 w-4 shrink-0" aria-hidden />
+                Export documents CSV
+              </button>
+            </>
           )}
         </div>
       </div>
