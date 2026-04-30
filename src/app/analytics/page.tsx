@@ -9,6 +9,15 @@ import {
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useGlobalStore } from "@/store/useGlobalStore";
+
+/** Must match backend `ROLES_RESIDENT_RECORD_EXPORT` (managerial roster / record export). */
+const ROLES_RESIDENT_ROSTER_EXPORT = [
+  "Deputy Manager",
+  "Home Manager",
+  "Regional Manager",
+  "Admin",
+] as const;
 
 const KPI_PERIODS = [
   { label: "Last 7 days", value: "7d" },
@@ -18,6 +27,11 @@ const KPI_PERIODS = [
 
 export default function AnalyticsPage() {
   const [period, setPeriod] = useState<(typeof KPI_PERIODS)[number]["value"]>("7d");
+  const [rosterExporting, setRosterExporting] = useState(false);
+  const user = useGlobalStore((s) => s.user);
+  const selectedHomeId = useGlobalStore((s) => s.selectedHomeId);
+  const canExportResidentRoster =
+    user?.role != null && ROLES_RESIDENT_ROSTER_EXPORT.includes(user.role as (typeof ROLES_RESIDENT_ROSTER_EXPORT)[number]);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["analytics-summary", period],
@@ -79,6 +93,60 @@ export default function AnalyticsPage() {
     window.location.assign(url);
   };
 
+  const exportResidentsRosterCsv = async () => {
+    setRosterExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (selectedHomeId && selectedHomeId !== "ALL") {
+        params.set("homeId", selectedHomeId);
+      }
+      const qs = params.toString();
+      const path = `/api/v1/analytics/residents-export.csv${qs ? `?${qs}` : ""}`;
+      const { data: blob } = await api.get(path, { responseType: "blob" });
+      const dl = new Blob([blob], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(dl);
+      const a = document.createElement("a");
+      a.href = url;
+      const suffix =
+        selectedHomeId && selectedHomeId !== "ALL" ? selectedHomeId : "all-homes";
+      a.download = `residents-roster-${suffix}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+      let msg = "Could not download roster export.";
+      if (typeof e === "object" && e !== null && "response" in e) {
+        const res = (e as { response?: { data?: unknown; status?: number } }).response;
+        const raw = res?.data;
+        if (raw instanceof Blob) {
+          try {
+            const text = await raw.text();
+            try {
+              const parsed = JSON.parse(text) as { error?: string };
+              if (typeof parsed.error === "string") msg = parsed.error;
+            } catch {
+              if (text.trim()) msg = text.slice(0, 200);
+            }
+          } catch {
+            /* ignore */
+          }
+        } else if (
+          raw &&
+          typeof raw === "object" &&
+          "error" in raw &&
+          typeof (raw as { error?: string }).error === "string"
+        ) {
+          msg = (raw as { error: string }).error;
+        }
+      }
+      alert(msg);
+    } finally {
+      setRosterExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -111,8 +179,26 @@ export default function AnalyticsPage() {
             <Download className="h-4 w-4" aria-hidden />
             Export audit CSV
           </button>
+          {canExportResidentRoster ? (
+            <button
+              type="button"
+              disabled={rosterExporting}
+              onClick={() => void exportResidentsRosterCsv()}
+              className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-800 shadow-sm hover:bg-zinc-50 disabled:opacity-50"
+            >
+              <Download className="h-4 w-4" aria-hidden />
+              {rosterExporting ? "Preparing…" : "Export resident roster CSV"}
+            </button>
+          ) : null}
         </div>
       </div>
+      {canExportResidentRoster ? (
+        <p className="text-xs text-zinc-500">
+          Roster export uses the home selected in the sidebar: choose one home for a single-home file,
+          or &quot;All homes&quot; for an estate-wide CSV (home columns included). Accounts limited to one
+          home always receive that home only.
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap gap-3 text-sm">
         <Link
