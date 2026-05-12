@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Suspense } from "react";
 
 export const metadata: Metadata = {
   title: "Family portal | DCRS",
@@ -12,5 +13,5 @@ export default function FamilyPortalLayout({
 }: {
   children: ReactNode;
 }) {
-  return children;
+  return <Suspense fallback={null}>{children}</Suspense>;
 }

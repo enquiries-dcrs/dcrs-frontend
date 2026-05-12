@@ -5,6 +5,13 @@
  * and spec-compliant conflict resolution for the React frontend.
  */
 
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const supabaseAuthClient =
+  supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+
 export type OperationType = 'INSERT' | 'UPDATE' | 'DELETE';
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'CONFLICT' | 'FAILED';
 
@@ -194,15 +201,42 @@ class OfflineSyncEngine {
       // DCRS Production API endpoint for processing sync envelopes
       // Default to the Express backend port used in this project.
       const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-      
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Idempotency-Key': job.client_generated_id,
+      };
+      if (supabaseAuthClient) {
+        const {
+          data: { session },
+        } = await supabaseAuthClient.auth.getSession();
+        if (session?.access_token) {
+          headers.Authorization = `Bearer ${session.access_token}`;
+        }
+      }
+
+      let body: unknown = job;
+      if (job.entity_type === 'Note' && job.operation_type === 'INSERT' && job.entity_id) {
+        const p = job.payload_json || {};
+        const text = typeof p.text === 'string' ? p.text : '';
+        body = {
+          operations: [
+            {
+              type: 'ADD_NOTE',
+              payload: {
+                residentId: job.entity_id,
+                text,
+                shareWithFamily: Boolean(p.shareWithFamily),
+              },
+            },
+          ],
+        };
+      }
+
       const response = await fetch(`${API_BASE_URL}/api/v1/sync`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Idempotency-Key': job.client_generated_id,
-          // 'Authorization': `Bearer ${token}` -> Handled by generic API interceptor in reality
-        },
-        body: JSON.stringify(job)
+        headers,
+        body: JSON.stringify(body),
       });
 
       if (response.ok) {

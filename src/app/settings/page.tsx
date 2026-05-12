@@ -1,6 +1,6 @@
  'use client';
 
- import React, { useState } from 'react';
+ import React, { useEffect, useState } from 'react';
  import {
    Users,
    Shield,
@@ -17,12 +17,17 @@
    ChevronRight,
    Search,
    KeyRound,
+   Heart,
  } from 'lucide-react';
  import { useQuery, useQueryClient } from '@tanstack/react-query';
  import { api } from '@/lib/api';
+ import { useGlobalStore } from '@/store/useGlobalStore';
 
  export default function AdminSettingsPage() {
    const queryClient = useQueryClient();
+   const inviteActorRole = useGlobalStore((s) => s.user?.role);
+   const limitedStaffInviter =
+     inviteActorRole === 'Home Manager' || inviteActorRole === 'Deputy Manager';
    const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
    const [isSubmitting, setIsSubmitting] = useState(false);
    const [resettingUserId, setResettingUserId] = useState<string | null>(null);
@@ -51,6 +56,12 @@
      role: 'Carer',
      homeScopeId: 'ALL'
    });
+   const [familyLinkForm, setFamilyLinkForm] = useState({
+     email: '',
+     serviceUserId: '',
+     relationship: '',
+   });
+   const [familyLinkSubmitting, setFamilyLinkSubmitting] = useState(false);
 
    const auditLimit = 25;
    const [auditOffset, setAuditOffset] = useState(0);
@@ -161,7 +172,7 @@
      try {
        // In production, this hits our secure Node API which uses the Supabase Admin Auth Client
        await api.post('/api/v1/admin/users/invite', inviteForm);
-       alert('Staff member invited successfully! They will receive an email to set their password.');
+       alert('Invitation sent. They will receive an email to set a password when the mail provider is configured.');
        setIsInviteModalOpen(false);
        setInviteForm({ email: '', firstName: '', lastName: '', role: 'Carer', homeScopeId: 'ALL' });
        await queryClient.invalidateQueries({ queryKey: ['admin-users'] });
@@ -173,6 +184,46 @@
        setIsSubmitting(false);
      }
    };
+
+   const handleFamilyPortalLink = async (e: React.FormEvent) => {
+     e.preventDefault();
+     const email = familyLinkForm.email.trim().toLowerCase();
+     const serviceUserId = familyLinkForm.serviceUserId.trim();
+     const relationship = familyLinkForm.relationship.trim();
+     if (!email || !serviceUserId) {
+       alert('Email and service user ID are required.');
+       return;
+     }
+     setFamilyLinkSubmitting(true);
+     try {
+       await api.post('/api/v1/admin/family-portal-access', {
+         email,
+         serviceUserId,
+         relationship: relationship || undefined,
+       });
+       alert('Family portal link saved.');
+       setFamilyLinkForm({ email: '', serviceUserId: '', relationship: '' });
+       await queryClient.invalidateQueries({ queryKey: ['admin-audit-logs'] });
+     } catch (error: unknown) {
+       console.error(error);
+       const msg =
+         typeof error === 'object' &&
+         error !== null &&
+         'response' in error &&
+         typeof (error as { response?: { data?: { error?: string } } }).response?.data?.error ===
+           'string'
+           ? (error as { response: { data: { error: string } } }).response.data.error
+           : 'Could not save link. Check permissions and IDs.';
+       alert(msg);
+     } finally {
+       setFamilyLinkSubmitting(false);
+     }
+   };
+
+   useEffect(() => {
+     if (!isInviteModalOpen || !limitedStaffInviter) return;
+     setInviteForm((f) => (f.role !== 'Family' ? { ...f, role: 'Family' } : f));
+   }, [isInviteModalOpen, limitedStaffInviter]);
 
    const handleDeactivateUser = async (userId: string, displayName: string) => {
      if (
@@ -397,7 +448,7 @@
            onClick={() => setIsInviteModalOpen(true)} 
            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium flex items-center shadow-sm text-sm transition-colors"
          >
-           <Plus className="w-4 h-4 mr-2" /> Invite Staff
+           <Plus className="w-4 h-4 mr-2" /> Invite user
          </button>
        </div>
 
@@ -533,6 +584,65 @@
              </tbody>
            </table>
          </div>
+       </div>
+
+       <div className="bg-white rounded-xl shadow-sm border border-teal-200 overflow-hidden">
+         <div className="p-6 border-b border-teal-100 bg-teal-50/60">
+           <h3 className="text-lg font-bold text-gray-900 flex items-center">
+             <Heart className="w-5 h-5 mr-2 text-teal-600" /> Family portal access
+           </h3>
+           <p className="text-sm text-gray-600 mt-1">
+             Use <span className="font-medium text-gray-800">Invite user</span> (role Family) or the service user record{' '}
+             <span className="font-medium text-gray-800">Overview → Invite family contact</span> first. This form only links an{' '}
+             <em>existing</em> provisioned email to a resident. Paste the service user UUID from the resident URL.
+           </p>
+         </div>
+         <form onSubmit={handleFamilyPortalLink} className="p-6 space-y-4">
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+             <div>
+               <label className="block text-xs font-semibold text-gray-600 mb-1">User email (provisioned)</label>
+               <input
+                 type="email"
+                 required
+                 value={familyLinkForm.email}
+                 onChange={(e) => setFamilyLinkForm({ ...familyLinkForm, email: e.target.value })}
+                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-500"
+                 placeholder="relative@example.com"
+               />
+             </div>
+             <div>
+               <label className="block text-xs font-semibold text-gray-600 mb-1">Service user ID (UUID)</label>
+               <input
+                 type="text"
+                 required
+                 value={familyLinkForm.serviceUserId}
+                 onChange={(e) => setFamilyLinkForm({ ...familyLinkForm, serviceUserId: e.target.value })}
+                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono outline-none focus:ring-2 focus:ring-teal-500"
+                 placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+               />
+             </div>
+           </div>
+           <div>
+             <label className="block text-xs font-semibold text-gray-600 mb-1">Relationship (optional)</label>
+             <input
+               type="text"
+               value={familyLinkForm.relationship}
+               onChange={(e) => setFamilyLinkForm({ ...familyLinkForm, relationship: e.target.value })}
+               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-500"
+               placeholder="e.g. Daughter"
+             />
+           </div>
+           <div className="flex justify-end border-t border-gray-100 pt-4">
+             <button
+               type="submit"
+               disabled={familyLinkSubmitting}
+               className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-6 py-2 rounded-lg text-sm font-medium transition-colors flex items-center"
+             >
+               {familyLinkSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+               Save link
+             </button>
+           </div>
+         </form>
        </div>
 
        {/* Audit trail (governance) */}
@@ -1380,10 +1490,19 @@
            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in-95">
              <div className="p-5 border-b border-gray-200 bg-slate-50 flex justify-between items-center">
                <div>
-                 <h3 className="font-bold text-lg text-gray-900">Invite New Staff Member</h3>
+                 <h3 className="font-bold text-lg text-gray-900">Invite user</h3>
                  <p className="text-xs text-gray-500">
-                   They will receive an email to set their password. If it does not arrive, use{' '}
-                   <strong>Reset password</strong> next to their name in User Management.
+                   {limitedStaffInviter ? (
+                     <>
+                       Home and deputy managers can invite <strong>Family</strong> accounts only. For a specific resident,
+                       you can also use <strong>Overview → Invite family contact</strong> on their chart.
+                     </>
+                   ) : (
+                     <>
+                       They will receive an email to set their password. If it does not arrive, use{' '}
+                       <strong>Reset password</strong> next to their name in User Management.
+                     </>
+                   )}
                  </p>
                </div>
                <button onClick={() => setIsInviteModalOpen(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -1428,14 +1547,23 @@
                    <label className="block text-xs font-semibold text-gray-600 mb-1">System Role (RBAC)</label>
                    <select 
                      value={inviteForm.role} onChange={e => setInviteForm({...inviteForm, role: e.target.value})}
-                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                     disabled={limitedStaffInviter}
+                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-gray-600"
                    >
+                    {limitedStaffInviter ? (
+                      <option value="Family">Family (Family portal)</option>
+                    ) : (
+                      <>
                     <option value="Carer">Carer (Basic Access)</option>
                     <option value="Senior Carer">Senior Carer (Shift Lead)</option>
                     <option value="Nurse">Nurse (Clinical Updates)</option>
                     <option value="Deputy Manager">Deputy Manager (Management)</option>
                     <option value="Home Manager">Home Manager (Management)</option>
                     <option value="Regional Manager">Regional Manager (Group Admin)</option>
+                    <option value="Admin">Admin (Platform)</option>
+                    <option value="Family">Family (Family portal only)</option>
+                      </>
+                    )}
                    </select>
                  </div>
 

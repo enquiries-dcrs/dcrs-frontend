@@ -14,7 +14,7 @@ export interface ResidentDetail {
   room_number?: string | null;
   unit_name?: string | null;
   home_name?: string | null;
-  dailyNotes: Array<{ id: string; text: string; time: string; author: string }>;
+  dailyNotes: Array<{ id: string; text: string; time: string; author: string; shareWithFamily?: boolean }>;
   medications: Array<{
     id: string;
     name: string;

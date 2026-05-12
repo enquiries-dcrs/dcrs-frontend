@@ -10,6 +10,8 @@ import {
   FileText, Mail, Globe, AlertCircle, Plus, CheckCircle2, AlertTriangle, 
   Mic, Activity, TrendingUp, ShieldAlert, GitMerge, Hospital, QrCode, Clock, Package, Camera,
   Download,
+  Heart,
+  UserPlus,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
@@ -2074,6 +2076,19 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     Boolean(user?.role) &&
     ['Deputy Manager', 'Regional Manager', 'Home Manager', 'Admin'].includes(user.role as string);
 
+  const canInviteFamilyContact =
+    Boolean(user?.role) &&
+    ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(user.role as string);
+
+  const [familyInviteOpen, setFamilyInviteOpen] = useState(false);
+  const [familyInvite, setFamilyInvite] = useState({
+    email: '',
+    firstName: '',
+    lastName: '',
+    relationship: '',
+  });
+  const [familyInviteSubmitting, setFamilyInviteSubmitting] = useState(false);
+
   const [isProfilePhotoModalOpen, setIsProfilePhotoModalOpen] = useState(false);
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const [profilePhotoPreviewUrl, setProfilePhotoPreviewUrl] = useState<string | null>(null);
@@ -2116,6 +2131,9 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
 
   // --- Notes & Incidents Tab State ---
   const [draftNote, setDraftNote] = useState('');
+  const [draftNoteShareWithFamily, setDraftNoteShareWithFamily] = useState(false);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteShareBusyId, setNoteShareBusyId] = useState<string | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [handoverSummary, setHandoverSummary] = useState('');
   const [isDraftingIncident, setIsDraftingIncident] = useState(false);
@@ -2453,10 +2471,36 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     } catch (e) { alert("Error analyzing medications"); } finally { setIsCheckingMeds(false); }
   };
 
-  // --- General UI Submission Handlers (Mocked for UI purposes) ---
+  const saveDailyNote = async (
+    rawText: string,
+    resetFn: () => void,
+    opts?: { prefix?: string; shareWithFamily?: boolean }
+  ) => {
+    const prefix = opts?.prefix || '';
+    const text = (prefix ? `${prefix}\n\n${rawText}` : rawText).trim();
+    if (!text) return;
+    setNoteSaving(true);
+    try {
+      await api.post(`/api/v1/residents/${resident.id}/daily-notes`, {
+        text,
+        shareWithFamily: Boolean(opts?.shareWithFamily),
+      });
+      await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+      resetFn();
+    } catch (e) {
+      console.error(e);
+      alert('Could not save note.');
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  // --- General UI Submission Handlers (Medication row still mocked) ---
   const handleGenericSubmit = (type: string, resetFn: () => void) => {
-    alert(`${type} feature submitted! Ensure a backend endpoint is added to persist to the database.`);
-    resetFn();
+    if (type === 'Medication') {
+      alert(`${type} feature submitted! Ensure a backend endpoint is added to persist to the database.`);
+      resetFn();
+    }
   };
 
   const revokeProfilePhotoPreview = () => {
@@ -2694,6 +2738,29 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       {activeTab === 'Overview' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in">
           <div className="md:col-span-2 space-y-6">
+            {!isReadOnly && canInviteFamilyContact && (
+              <div className="rounded-xl border border-teal-200 bg-teal-50/90 p-5 shadow-sm">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-teal-900 flex items-center gap-2">
+                      <UserPlus className="h-5 w-5 shrink-0 text-teal-600" aria-hidden />
+                      Family portal
+                    </h3>
+                    <p className="mt-1 text-sm text-teal-800/95">
+                      Email an invite to a relative or representative. When they accept, they sign in here and see
+                      updates you mark for the family portal.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFamilyInviteOpen(true)}
+                    className="shrink-0 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-teal-700"
+                  >
+                    Invite family contact
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
               <div className="space-y-4">
@@ -3113,7 +3180,18 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                     <div className="text-sm text-gray-800 whitespace-pre-wrap flex-1">{handoverSummary}</div>
                     <div className="flex justify-end gap-3 mt-4 pt-4 border-t border-blue-50">
                       <button onClick={() => setHandoverSummary('')} className="text-sm text-gray-600 font-medium">Discard</button>
-                      <button onClick={() => handleGenericSubmit('Handover Note', () => setHandoverSummary(''))} className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg font-medium">Save Note</button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void saveDailyNote(handoverSummary, () => setHandoverSummary(''), {
+                            prefix: '[AI Handover Summary]',
+                          })
+                        }
+                        disabled={noteSaving || !handoverSummary.trim()}
+                        className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
+                      >
+                        Save Note
+                      </button>
                     </div>
                   </div>
                 )}
@@ -3131,7 +3209,18 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                     <div className="text-sm text-gray-800 whitespace-pre-wrap flex-1">{incidentDraft}</div>
                     <div className="flex justify-end gap-3 mt-4 pt-4 border-t border-rose-50">
                       <button onClick={() => setIncidentDraft('')} className="text-sm text-gray-600 font-medium">Dismiss</button>
-                      <button onClick={() => handleGenericSubmit('Incident Report', () => setIncidentDraft(''))} className="text-sm bg-rose-600 text-white px-4 py-2 rounded-lg font-medium">Save to Record</button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void saveDailyNote(incidentDraft, () => setIncidentDraft(''), {
+                            prefix: '[AI Incident Draft]',
+                          })
+                        }
+                        disabled={noteSaving || !incidentDraft.trim()}
+                        className="text-sm bg-rose-600 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50"
+                      >
+                        Save to Record
+                      </button>
                     </div>
                   </div>
                 )}
@@ -3143,7 +3232,20 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Historical Notes</h3>
             {!isReadOnly && (
-              <div className="flex gap-2 mb-6 p-4 bg-slate-50 rounded-lg border border-gray-100">
+              <>
+              <div className="mb-3 flex items-center gap-2 text-xs text-gray-600">
+                <input
+                  id="share-note-family"
+                  type="checkbox"
+                  checked={draftNoteShareWithFamily}
+                  onChange={(e) => setDraftNoteShareWithFamily(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                <label htmlFor="share-note-family" className="cursor-pointer select-none">
+                  Also show this note on the family portal (non-clinical updates only)
+                </label>
+              </div>
+            <div className="flex gap-2 mb-6 p-4 bg-slate-50 rounded-lg border border-gray-100">
                 <textarea 
                   value={draftNote} onChange={e => setDraftNote(e.target.value)} 
                   placeholder="Type or dictate care note..." 
@@ -3154,25 +3256,65 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                     <Mic className="w-4 h-4 mr-1"/> Dictate
                   </button>
                   <button 
-                    onClick={() => handleGenericSubmit('Care Note', () => setDraftNote(''))} 
-                    disabled={!draftNote.trim()} 
+                    onClick={() =>
+                      void saveDailyNote(draftNote, () => {
+                        setDraftNote('');
+                        setDraftNoteShareWithFamily(false);
+                      }, { shareWithFamily: draftNoteShareWithFamily })
+                    } 
+                    disabled={!draftNote.trim() || noteSaving} 
                     className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1 rounded-lg font-medium text-xs flex-1 transition-colors"
                   >
-                    Save
+                    {noteSaving ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : 'Save'}
                   </button>
                 </div>
-              </div>
+            </div>
+              </>
             )}
             <div className="space-y-4">
               {(resident.dailyNotes || []).length === 0 ? (
                 <p className="text-sm text-gray-500 italic">No historical notes recorded.</p>
-              ) : (resident.dailyNotes || []).map((note: any, i: number) => (
-                <div key={i} className="p-4 bg-slate-50 rounded-lg border border-gray-100">
-                  <div className="flex justify-between items-start mb-2">
+              ) : (resident.dailyNotes || []).map((note: any) => (
+                <div key={note.id || note.time} className="p-4 bg-slate-50 rounded-lg border border-gray-100">
+                  <div className="flex justify-between items-start mb-2 gap-2">
                     <span className="font-semibold text-sm text-gray-900">{note.author}</span>
-                    <span className="text-xs text-gray-500">{note.time}</span>
+                    <span className="text-xs text-gray-500 shrink-0">{note.time}</span>
                   </div>
                   <p className="text-sm text-gray-700 whitespace-pre-wrap">{note.text}</p>
+                  {!isReadOnly && note.id ? (
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        type="button"
+                        disabled={noteShareBusyId === note.id}
+                        onClick={async () => {
+                          setNoteShareBusyId(note.id);
+                          try {
+                            await api.patch(`/api/v1/residents/${resident.id}/daily-notes/${note.id}`, {
+                              shareWithFamily: !note.shareWithFamily,
+                            });
+                            await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+                          } catch (e) {
+                            console.error(e);
+                            alert('Could not update family portal sharing.');
+                          } finally {
+                            setNoteShareBusyId(null);
+                          }
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
+                          note.shareWithFamily
+                            ? 'border-teal-300 bg-teal-50 text-teal-800'
+                            : 'border-gray-200 bg-white text-gray-600 hover:border-teal-200'
+                        } disabled:opacity-50`}
+                      >
+                        {noteShareBusyId === note.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
+                        ) : (
+                          <Heart className="h-3 w-3" aria-hidden />
+                        )}
+                        {note.shareWithFamily ? 'On family portal' : 'Family portal'}
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -3667,6 +3809,130 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
       )}
 
       {/* Profile photo upload (camera / gallery, managers) */}
+      {familyInviteOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-gray-200 bg-teal-50 p-5">
+              <h3 className="text-lg font-bold text-teal-950">Invite family contact</h3>
+              <button
+                type="button"
+                onClick={() => !familyInviteSubmitting && setFamilyInviteOpen(false)}
+                className="text-gray-400 transition-colors hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form
+              className="space-y-4 p-5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void (async () => {
+                  if (!resident?.id || !familyInvite.email.trim()) return;
+                  setFamilyInviteSubmitting(true);
+                  try {
+                    const { data } = await api.post<{
+                      message?: string;
+                      linkedExisting?: boolean;
+                    }>(`/api/v1/residents/${resident.id}/family-invite`, {
+                      email: familyInvite.email.trim(),
+                      firstName: familyInvite.firstName.trim(),
+                      lastName: familyInvite.lastName.trim(),
+                      relationship: familyInvite.relationship.trim(),
+                    });
+                    alert(
+                      data?.message ||
+                        (data?.linkedExisting
+                          ? 'They already had a family login; access to this resident was added.'
+                          : 'Invitation sent.')
+                    );
+                    setFamilyInviteOpen(false);
+                    setFamilyInvite({ email: '', firstName: '', lastName: '', relationship: '' });
+                  } catch (err: unknown) {
+                    console.error(err);
+                    const msg =
+                      typeof err === 'object' &&
+                      err !== null &&
+                      'response' in err &&
+                      typeof (err as { response?: { data?: { error?: string } } }).response?.data?.error ===
+                        'string'
+                        ? (err as { response: { data: { error: string } } }).response.data.error
+                        : 'Could not send invite. Check the email and your permissions.';
+                    alert(msg);
+                  } finally {
+                    setFamilyInviteSubmitting(false);
+                  }
+                })();
+              }}
+            >
+              <p className="text-xs text-gray-600">
+                For <span className="font-medium text-gray-800">{resident.first_name} {resident.last_name}</span>.
+                They receive an email from your identity provider to set a password.
+              </p>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-gray-600">Email</label>
+                <input
+                  type="email"
+                  required
+                  value={familyInvite.email}
+                  onChange={(e) => setFamilyInvite({ ...familyInvite, email: e.target.value })}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-500"
+                  placeholder="name@example.com"
+                  autoComplete="email"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-gray-600">First name</label>
+                  <input
+                    type="text"
+                    value={familyInvite.firstName}
+                    onChange={(e) => setFamilyInvite({ ...familyInvite, firstName: e.target.value })}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-gray-600">Last name</label>
+                  <input
+                    type="text"
+                    value={familyInvite.lastName}
+                    onChange={(e) => setFamilyInvite({ ...familyInvite, lastName: e.target.value })}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-gray-600">Relationship (optional)</label>
+                <input
+                  type="text"
+                  value={familyInvite.relationship}
+                  onChange={(e) => setFamilyInvite({ ...familyInvite, relationship: e.target.value })}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-500"
+                  placeholder="e.g. Daughter"
+                />
+              </div>
+              <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">
+                <button
+                  type="button"
+                  disabled={familyInviteSubmitting}
+                  onClick={() => setFamilyInviteOpen(false)}
+                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={familyInviteSubmitting}
+                  className="inline-flex items-center rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+                >
+                  {familyInviteSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Send invite
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {isProfilePhotoModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
           <input

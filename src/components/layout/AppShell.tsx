@@ -15,7 +15,7 @@ const supabase =
 
 function isPublicPath(path: string | null): boolean {
   if (!path) return false;
-  if (path === '/' || path === '/family') return true;
+  if (path === '/') return true;
   if (path.startsWith('/auth')) return true;
   return false;
 }
@@ -91,10 +91,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        logout();
-        router.push('/');
+      if (session) return;
+
+      logout();
+
+      // INITIAL_SESSION with no user is normal on public routes; do not redirect away from /family, /, etc.
+      if (event === 'INITIAL_SESSION' && isPublicPath(pathname)) {
+        return;
       }
+
+      router.push('/');
     });
 
     return () => {

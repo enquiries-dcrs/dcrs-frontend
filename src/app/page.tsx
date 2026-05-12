@@ -86,11 +86,11 @@ export default function LoginPage() {
             email: me.email,
             role: me.system_role,
           });
-          router.push("/dashboard");
+          router.push(me.system_role === "Family" ? "/family" : "/dashboard");
         } catch {
           await supabase.auth.signOut();
           setError(
-            "This Supabase account is not linked to a DCRS staff profile, or your access is inactive. Use the exact email from your invite, complete the invite link to set a password, or ask an admin to reset your access."
+            "This Supabase account is not linked to a provisioned DCRS user (staff or family), or your access is inactive. Use the exact email from your invite, complete the invite link to set a password, or ask an admin to reset your access."
           );
         }
       }
