@@ -1,10 +1,12 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import { Home, Bed, Users, Pill, BarChart3, Settings, LogOut, Droplets } from 'lucide-react';
 import { useGlobalStore } from '@/store/useGlobalStore';
+import { api } from '@/lib/api';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -15,11 +17,22 @@ export function Sidebar() {
   const logout = useGlobalStore((state) => state.logout);
   const user = useGlobalStore((state) => state.user);
 
-  const MOCK_HOMES = [
-    { id: '11111111-1111-1111-1111-111111111111', name: 'Watson House' },
-    { id: '22222222-2222-2222-2222-222222222222', name: 'Mariners Court' },
-    { id: '33333333-3333-3333-3333-333333333333', name: 'Redbricks' },
-  ];
+  const { data: layout } = useQuery({
+    queryKey: ['facility-layout', 'sidebar'],
+    queryFn: async () => {
+      const { data } = await api.get<{ homes: Array<{ id: string; name: string }> }>('/api/v1/facility-layout');
+      return data;
+    },
+    staleTime: 60_000,
+  });
+
+  const homes = layout?.homes ?? [];
+
+  useEffect(() => {
+    if (!homes.length || selectedHomeId === 'ALL') return;
+    const ok = homes.some((h) => h.id === selectedHomeId);
+    if (!ok) setSelectedHomeId('ALL');
+  }, [homes, selectedHomeId, setSelectedHomeId]);
 
   // Updated to match the exact routes verified by the frontend check
   const navItems = [
@@ -52,7 +65,11 @@ export function Sidebar() {
           className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option value="ALL">Group View (All Homes)</option>
-          {MOCK_HOMES.map(h => <option key={h.id} value={h.id}>{h.name}</option>)}
+          {homes.map((h) => (
+            <option key={h.id} value={h.id}>
+              {h.name}
+            </option>
+          ))}
         </select>
       </div>
 
