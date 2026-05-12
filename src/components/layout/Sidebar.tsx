@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Home, Bed, Users, Pill, BarChart3, Settings, LogOut } from 'lucide-react';
+import { Home, Bed, Users, Pill, BarChart3, Settings, LogOut, Droplets } from 'lucide-react';
 import { useGlobalStore } from '@/store/useGlobalStore';
 
 export function Sidebar() {
@@ -25,6 +25,7 @@ export function Sidebar() {
   const navItems = [
     { name: 'Dashboard', icon: Home, path: '/dashboard' },
     { name: 'Bed Board', icon: Bed, path: '/bed-board' },
+    { name: 'Bathroom clean', icon: Droplets, path: '/communal-bathroom-weekly-clean' },
     { name: 'Service Users', icon: Users, path: '/residents' },
     { name: 'eMAR Admin', icon: Pill, path: '/emar' },
     { name: 'Analytics', icon: BarChart3, path: '/analytics' },

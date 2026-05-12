@@ -16,6 +16,7 @@ import {
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
 import { formatApiError } from '@/lib/format-api-error';
+import { TopicalApplicationsTab } from '@/features/residents/TopicalApplicationsTab';
 
 function todayIsoDate(): string {
   // Use local date; chart_date is stored as a DATE.
@@ -2382,7 +2383,7 @@ export default function ResidentProfilePage() {
   const canEditEmergencyTransfer =
     Boolean(user?.role) &&
     EMERGENCY_PROFILE_EDIT_ROLES.includes(user.role as (typeof EMERGENCY_PROFILE_EDIT_ROLES)[number]);
-  const tabs = ['Overview', 'Care plan', 'Assessments', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
+  const tabs = ['Overview', 'Care plan', 'Assessments', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'Topical', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
@@ -3520,6 +3521,14 @@ export default function ResidentProfilePage() {
       {/* --- TAB: DAILY CARE --- */}
       {activeTab === 'Daily care' && (
         <DailyCareTab residentId={resident.id} isReadOnly={isReadOnly} />
+      )}
+
+      {activeTab === 'Topical' && (
+        <TopicalApplicationsTab
+          residentId={resident.id}
+          isReadOnly={isReadOnly}
+          medications={resident.medications ?? []}
+        />
       )}
 
       {/* --- TAB: PEEP --- */}
