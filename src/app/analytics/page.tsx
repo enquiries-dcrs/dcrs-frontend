@@ -25,9 +25,34 @@ const KPI_PERIODS = [
   { label: "Quarter to date", value: "qtd" },
 ];
 
+type AssuranceIndicator = {
+  key: string;
+  label: string;
+  value: number | null;
+  unit: string;
+  hint?: string;
+};
+
+type AssuranceDomain = {
+  id: string;
+  title: string;
+  cqcPrompt: string;
+  indicators: AssuranceIndicator[];
+};
+
+type AssurancePackRes = {
+  schemaVersion: number;
+  generatedAt: string;
+  period: { label: string; from: string; to: string };
+  home: { filterHomeId: string | null; label: string };
+  disclaimer: string;
+  domains: AssuranceDomain[];
+};
+
 export default function AnalyticsPage() {
   const [period, setPeriod] = useState<(typeof KPI_PERIODS)[number]["value"]>("7d");
   const [rosterExporting, setRosterExporting] = useState(false);
+  const [assuranceCsvExporting, setAssuranceCsvExporting] = useState(false);
   const user = useGlobalStore((s) => s.user);
   const selectedHomeId = useGlobalStore((s) => s.selectedHomeId);
   const canExportResidentRoster =
@@ -47,6 +72,70 @@ export default function AnalyticsPage() {
     },
     staleTime: 30_000,
   });
+
+  const { data: assurancePack, isLoading: assuranceLoading, isError: assuranceError } = useQuery({
+    queryKey: ["analytics-assurance-pack", period, selectedHomeId],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("period", period);
+      if (selectedHomeId && selectedHomeId !== "ALL") {
+        params.set("homeId", selectedHomeId);
+      }
+      const { data } = await api.get<AssurancePackRes>(
+        `/api/v1/analytics/assurance-pack?${params.toString()}`
+      );
+      return data;
+    },
+    enabled: canExportResidentRoster,
+    staleTime: 60_000,
+  });
+
+  const exportAssurancePackCsv = async () => {
+    setAssuranceCsvExporting(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("period", period);
+      if (selectedHomeId && selectedHomeId !== "ALL") {
+        params.set("homeId", selectedHomeId);
+      }
+      const path = `/api/v1/analytics/assurance-pack.csv?${params.toString()}`;
+      const { data: blob } = await api.get(path, { responseType: "blob" });
+      const dl = new Blob([blob], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(dl);
+      const a = document.createElement("a");
+      a.href = url;
+      const suffix =
+        selectedHomeId && selectedHomeId !== "ALL" ? selectedHomeId.slice(0, 8) : "estate";
+      a.download = `cqc-assurance-pack-${suffix}-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+      let msg = "Could not download assurance pack CSV.";
+      if (typeof e === "object" && e !== null && "response" in e) {
+        const res = (e as { response?: { data?: unknown } }).response;
+        const raw = res?.data;
+        if (raw instanceof Blob) {
+          try {
+            const text = await raw.text();
+            try {
+              const parsed = JSON.parse(text) as { error?: string };
+              if (typeof parsed.error === "string") msg = parsed.error;
+            } catch {
+              if (text.trim()) msg = text.slice(0, 200);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      alert(msg);
+    } finally {
+      setAssuranceCsvExporting(false);
+    }
+  };
 
   const kpis = useMemo(() => {
     const notesCreated = data?.notesCreated ?? 0;
@@ -215,6 +304,73 @@ export default function AnalyticsPage() {
         </Link>
       </div>
 
+      {canExportResidentRoster ? (
+        <div className="rounded-xl border border-teal-200 bg-teal-50/80 p-6 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-teal-950">CQC-shaped assurance pack</h2>
+              <p className="mt-1 max-w-3xl text-sm text-teal-900/90">
+                Manager-grade metrics grouped under the five CQC <strong>quality statement</strong> themes (Safe,
+                Effective, Caring, Responsive, Well-led). Use as <strong>evidence prompts</strong> for governance and
+                inspection preparation — not a rating predictor. Same period and home scope as roster export.
+              </p>
+              {assurancePack?.disclaimer ? (
+                <p className="mt-3 text-xs leading-relaxed text-teal-900/80">{assurancePack.disclaimer}</p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              disabled={assuranceCsvExporting || assuranceLoading}
+              onClick={() => void exportAssurancePackCsv()}
+              className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-teal-700 bg-teal-700 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-teal-800 disabled:opacity-50"
+            >
+              <Download className="h-4 w-4" aria-hidden />
+              {assuranceCsvExporting ? "Preparing CSV…" : "Download pack (CSV)"}
+            </button>
+          </div>
+          {assuranceError ? (
+            <p className="mt-4 text-sm text-rose-700">Could not load assurance pack. Check your role and try again.</p>
+          ) : assuranceLoading ? (
+            <p className="mt-4 text-sm text-teal-800">Loading assurance metrics…</p>
+          ) : assurancePack ? (
+            <div className="mt-6 space-y-4">
+              <p className="text-xs text-teal-900/80">
+                <span className="font-medium">Scope:</span> {assurancePack.home.label} ·{" "}
+                <span className="font-medium">Generated:</span>{" "}
+                {new Date(assurancePack.generatedAt).toLocaleString("en-GB")} ·{" "}
+                <span className="font-medium">Period:</span> {assurancePack.period.label}
+              </p>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {assurancePack.domains.map((d) => (
+                  <div
+                    key={d.id}
+                    className="rounded-lg border border-teal-100 bg-white/90 p-4 shadow-sm"
+                  >
+                    <h3 className="font-semibold text-teal-950">{d.title}</h3>
+                    <p className="mt-1 text-[11px] leading-snug text-teal-800/85">{d.cqcPrompt}</p>
+                    <ul className="mt-3 space-y-2 text-sm">
+                      {d.indicators.map((ind) => (
+                        <li key={ind.key} className="flex justify-between gap-2 border-b border-teal-50 pb-2 last:border-0">
+                          <span className="text-teal-900/90">{ind.label}</span>
+                          <span className="shrink-0 font-mono font-semibold text-teal-950">
+                            {ind.value == null ? "—" : ind.value}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600">
+          <strong className="text-zinc-800">CQC-shaped assurance pack</strong> is available to deputy managers, home
+          managers, regional managers, and admins. Ask your organisation for export permissions if you need this view.
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-3">
         {kpis.map((k) => (
           <div
@@ -254,23 +410,24 @@ export default function AnalyticsPage() {
 
       <div className="rounded-xl border border-zinc-200 bg-white shadow-sm">
         <div className="border-b border-zinc-200 px-4 py-3">
-          <h2 className="font-semibold text-zinc-900">Audit-ready extracts</h2>
+          <h2 className="font-semibold text-zinc-900">Other audit-ready extracts</h2>
           <p className="text-xs text-zinc-500">
-            Immutable logs and sign-offs for inspections.
+            Use resident CSV exports from the service user record where available; additional catalogue items below are
+            roadmap placeholders.
           </p>
         </div>
         <ul className="divide-y divide-zinc-100 text-sm">
           <li className="flex items-center justify-between px-4 py-3">
             <span className="text-zinc-800">Medication administration log</span>
-            <span className="text-zinc-500">CSV · PDF</span>
+            <span className="text-zinc-500">CSV · PDF (planned)</span>
           </li>
           <li className="flex items-center justify-between px-4 py-3">
             <span className="text-zinc-800">Incident register summary</span>
-            <span className="text-zinc-500">CSV</span>
+            <span className="text-zinc-500">CSV (planned)</span>
           </li>
           <li className="flex items-center justify-between px-4 py-3">
             <span className="text-zinc-800">Staff competency matrix</span>
-            <span className="text-zinc-500">PDF</span>
+            <span className="text-zinc-500">PDF (planned)</span>
           </li>
         </ul>
       </div>

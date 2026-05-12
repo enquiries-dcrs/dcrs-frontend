@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { createClient } from "@supabase/supabase-js";
 import {
   Calendar,
@@ -51,6 +51,15 @@ function residentPickLabel(r: FamilyContextRes["residents"][0]): string {
   return n || r.service_user_id;
 }
 
+function ymdLocal(d: Date, addDays = 0): string {
+  const x = new Date(d);
+  x.setDate(x.getDate() + addDays);
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, "0");
+  const day = String(x.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export default function FamilyPortalPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -86,6 +95,51 @@ export default function FamilyPortalPage() {
   }, [residents, paramRid]);
 
   const effectiveId = selectedId;
+
+  const [visitModalOpen, setVisitModalOpen] = useState(false);
+  const [visitPreferredDate, setVisitPreferredDate] = useState(() => ymdLocal(new Date(), 1));
+  const [visitTimeNote, setVisitTimeNote] = useState("");
+  const [visitMessage, setVisitMessage] = useState("");
+  const [visitFeedback, setVisitFeedback] = useState<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
+
+  const visitMutation = useMutation({
+    mutationFn: async () => {
+      if (!effectiveId) throw new Error("No resident selected.");
+      const { data } = await api.post<{
+        success: boolean;
+        visitRequestId?: string;
+        taskId?: string;
+      }>(`/api/v1/family/residents/${effectiveId}/visit-request`, {
+        preferredDate: visitPreferredDate,
+        preferredTimeNote: visitTimeNote.trim() || undefined,
+        message: visitMessage.trim() || undefined,
+      });
+      return data;
+    },
+    onSuccess: () => {
+      setVisitModalOpen(false);
+      setVisitTimeNote("");
+      setVisitMessage("");
+      setVisitPreferredDate(ymdLocal(new Date(), 1));
+      setVisitFeedback({
+        kind: "ok",
+        text: "Your request was sent. The care team will contact you during office hours.",
+      });
+      window.setTimeout(() => setVisitFeedback(null), 8000);
+    },
+    onError: (err: unknown) => {
+      let msg = "Could not send your request.";
+      if (err && typeof err === "object" && "response" in err) {
+        const ax = err as { response?: { data?: { error?: string } } };
+        const e = ax.response?.data?.error;
+        if (e) msg = e;
+      }
+      setVisitFeedback({ kind: "err", text: msg });
+    },
+  });
 
   const { data: feedData, isLoading: feedLoading, error: feedError } = useQuery({
     queryKey: ["family-feed", effectiveId],
@@ -292,13 +346,122 @@ export default function FamilyPortalPage() {
             <p className="mt-1 text-center text-xs text-teal-700/90">
               Requests are reviewed by the care team during office hours.
             </p>
-            <button
-              type="button"
-              className="mt-4 w-full rounded-full bg-teal-600 px-6 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-teal-700"
-            >
-              Request visit time
-            </button>
+            {visitFeedback ? (
+              <p
+                className={`mt-3 rounded-lg px-3 py-2 text-center text-xs ${
+                  visitFeedback.kind === "ok"
+                    ? "bg-white/80 text-teal-900"
+                    : "bg-rose-100 text-rose-800"
+                }`}
+                role="status"
+              >
+                {visitFeedback.text}
+              </p>
+            ) : null}
+            {context?.role === "Family" ? (
+              <button
+                type="button"
+                className="mt-4 w-full rounded-full bg-teal-600 px-6 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-teal-700 disabled:opacity-60"
+                disabled={!effectiveId}
+                onClick={() => {
+                  setVisitFeedback(null);
+                  setVisitPreferredDate(ymdLocal(new Date(), 1));
+                  setVisitModalOpen(true);
+                }}
+              >
+                Request visit time
+              </button>
+            ) : (
+              <p className="mt-4 text-center text-xs text-teal-800/80">
+                Staff preview: only linked family accounts can submit visit requests from this screen.
+              </p>
+            )}
           </section>
+
+          {visitModalOpen && context?.role === "Family" ? (
+            <div
+              className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 p-4 sm:items-center"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="visit-modal-title"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                  setVisitModalOpen(false);
+                  visitMutation.reset();
+                }
+              }}
+            >
+              <div
+                className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 id="visit-modal-title" className="text-lg font-bold text-gray-900">
+                  Request a visit
+                </h3>
+                <p className="mt-1 text-xs text-gray-500">
+                  Choose a preferred date. The home will confirm or suggest another time.
+                </p>
+                <label className="mt-4 block text-sm font-medium text-gray-700">
+                  Preferred date
+                  <input
+                    type="date"
+                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    value={visitPreferredDate}
+                    min={ymdLocal(new Date(), 0)}
+                    max={ymdLocal(new Date(), 365)}
+                    onChange={(e) => setVisitPreferredDate(e.target.value)}
+                  />
+                </label>
+                <label className="mt-3 block text-sm font-medium text-gray-700">
+                  Preferred time (optional)
+                  <input
+                    type="text"
+                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="e.g. afternoon, 2–4pm"
+                    value={visitTimeNote}
+                    onChange={(e) => setVisitTimeNote(e.target.value)}
+                    maxLength={120}
+                  />
+                </label>
+                {visitFeedback?.kind === "err" ? (
+                  <p className="mt-3 text-xs text-rose-600" role="alert">
+                    {visitFeedback.text}
+                  </p>
+                ) : null}
+                <label className="mt-3 block text-sm font-medium text-gray-700">
+                  Message (optional)
+                  <textarea
+                    className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    rows={3}
+                    placeholder="Anything the team should know"
+                    value={visitMessage}
+                    onChange={(e) => setVisitMessage(e.target.value)}
+                    maxLength={2000}
+                  />
+                </label>
+                <div className="mt-6 flex gap-2">
+                  <button
+                    type="button"
+                    className="flex-1 rounded-full border border-gray-200 py-2.5 text-sm font-semibold text-gray-700"
+                    onClick={() => {
+                      setVisitModalOpen(false);
+                      visitMutation.reset();
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 rounded-full bg-teal-600 py-2.5 text-sm font-bold text-white disabled:opacity-50"
+                    disabled={visitMutation.isPending || !visitPreferredDate}
+                    onClick={() => visitMutation.mutate()}
+                  >
+                    {visitMutation.isPending ? "Sending…" : "Send request"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <section
             className="flex gap-3 rounded-2xl border border-gray-100 bg-gray-50 p-4 text-sm text-gray-600"
