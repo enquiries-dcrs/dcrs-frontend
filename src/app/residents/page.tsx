@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useResidents } from "@/hooks/useResidents";
 import { ChevronRight, Loader2, Plus, Search } from "lucide-react";
@@ -90,14 +91,18 @@ export default function ResidentsPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <table className="w-full min-w-[640px] text-left text-sm">
             <thead className="bg-white text-gray-500 border-b border-gray-200">
               <tr>
-                <th className="p-4 font-medium">Resident Name</th>
-                <th className="p-4 font-medium">DOB</th>
-                <th className="p-4 font-medium">Location</th>
-                <th className="p-4 font-medium">Status</th>
-                <th className="p-4"></th>
+                <th colSpan={5} className="p-0 font-normal">
+                  <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.25fr)_auto_2.5rem] items-center gap-x-4 px-4 py-4">
+                    <div className="font-medium">Resident Name</div>
+                    <div className="font-medium">DOB</div>
+                    <div className="font-medium">Location</div>
+                    <div className="font-medium">Status</div>
+                    <span className="sr-only">Open</span>
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -108,56 +113,63 @@ export default function ResidentsPage() {
                   </td>
                 </tr>
               ) : (
-                displayedResidents.map((r) => (
-                  <tr
-                    key={r.id}
-                    onClick={() => router.push(`/residents/${r.id}`)}
-                    className="hover:bg-slate-50 cursor-pointer transition-colors"
-                  >
-                    <td className="p-4 flex items-center gap-4">
-                      {r.profile_image_url ? (
-                        <img
-                          src={r.profile_image_url}
-                          alt={`${r.first_name ?? ""}`}
-                          className="w-12 h-12 rounded-full object-cover border-2 border-white shadow-sm shrink-0"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm shrink-0 border border-blue-200">
-                          {(r.first_name ?? " ")[0]}
-                          {(r.last_name ?? " ")[0]}
-                        </div>
-                      )}
-
-                      <div>
-                        <div className="font-bold text-gray-900 text-base">
-                          {r.last_name}, {r.first_name}
-                        </div>
-                        <p className="text-xs text-gray-500 font-medium mt-0.5">
-                          NHS: {r.nhs_number || "N/A"}
-                        </p>
-                      </div>
-                    </td>
-                    <td className="p-4 text-gray-600 font-medium">
-                      {r.date_of_birth
-                        ? new Date(r.date_of_birth).toLocaleDateString("en-GB")
-                        : "—"}
-                    </td>
-                    <td className="p-4 text-gray-900">
-                      <span className="font-medium">{r.unit_name || "N/A"}</span>
-                      <p className="text-xs text-gray-500 font-normal mt-0.5">
-                        Room {r.room_number || "N/A"}
-                      </p>
-                    </td>
-                    <td className="p-4">
-                      <Badge variant={r.status === "DISCHARGED" ? "warning" : "default"}>
-                        {r.status}
-                      </Badge>
-                    </td>
-                    <td className="p-4 text-right">
-                      <ChevronRight className="w-5 h-5 text-gray-400 inline-block" />
-                    </td>
-                  </tr>
-                ))
+                displayedResidents.map((r) => {
+                  const label = `${r.last_name ?? ""}, ${r.first_name ?? ""}`.trim() || "Service user";
+                  return (
+                    <tr key={r.id} className="transition-colors hover:bg-slate-50">
+                      <td colSpan={5} className="p-0">
+                        <Link
+                          href={`/residents/${r.id}`}
+                          prefetch
+                          className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.25fr)_auto_2.5rem] items-center gap-x-4 px-4 py-4 text-inherit no-underline outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                          aria-label={`Open clinical record for ${label}`}
+                        >
+                          <div className="flex min-w-0 items-center gap-4">
+                            {r.profile_image_url ? (
+                              <img
+                                src={r.profile_image_url}
+                                alt=""
+                                className="h-12 w-12 shrink-0 rounded-full border-2 border-white object-cover shadow-sm"
+                              />
+                            ) : (
+                              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-blue-200 bg-blue-100 text-sm font-bold text-blue-700">
+                                {(r.first_name ?? " ")[0]}
+                                {(r.last_name ?? " ")[0]}
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <div className="text-base font-bold text-gray-900">
+                                {r.last_name}, {r.first_name}
+                              </div>
+                              <p className="mt-0.5 text-xs font-medium text-gray-500">
+                                NHS: {r.nhs_number || "N/A"}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="font-medium text-gray-600">
+                            {r.date_of_birth
+                              ? new Date(r.date_of_birth).toLocaleDateString("en-GB")
+                              : "—"}
+                          </div>
+                          <div className="text-gray-900">
+                            <span className="font-medium">{r.unit_name || "N/A"}</span>
+                            <p className="mt-0.5 text-xs font-normal text-gray-500">
+                              Room {r.room_number || "N/A"}
+                            </p>
+                          </div>
+                          <div>
+                            <Badge variant={r.status === "DISCHARGED" ? "warning" : "default"}>
+                              {r.status}
+                            </Badge>
+                          </div>
+                          <div className="flex justify-end">
+                            <ChevronRight className="h-5 w-5 text-gray-400" aria-hidden />
+                          </div>
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

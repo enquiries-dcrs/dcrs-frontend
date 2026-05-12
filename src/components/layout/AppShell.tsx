@@ -2,16 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Sidebar } from './Sidebar';
 import Header from '@/components/Header';
 import { useGlobalStore } from '@/store/useGlobalStore';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseBrowserClient } from '@/lib/supabase-browser';
 import { api } from '@/lib/api';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase =
-  supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 function isPublicPath(path: string | null): boolean {
   if (!path) return false;
@@ -23,6 +19,7 @@ function isPublicPath(path: string | null): boolean {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   const isAuthenticated = useGlobalStore((state) => state.isAuthenticated);
   const login = useGlobalStore((state) => state.login);
@@ -37,6 +34,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    const supabase = getSupabaseBrowserClient();
 
     const verifySecureSession = async () => {
       if (!supabase) {
@@ -44,40 +42,50 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const {
-        data: { session },
-        error,
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
 
-      if (!mounted) return;
+        if (!mounted) return;
 
-      if (error || !session) {
-        if (isAuthenticated) logout();
-        if (!isPublicPath(pathname)) router.push('/');
-      } else if (!isAuthenticated && session) {
-        try {
-          const { data: me } = await api.get<{
-            id?: string;
-            email: string;
-            first_name: string | null;
-            last_name: string | null;
-            system_role: string;
-          }>('/api/v1/auth/me');
-          const displayName =
-            `${me.first_name ?? ''} ${me.last_name ?? ''}`.trim() || me.email;
-          login({
-            id: me.id,
-            name: displayName,
-            email: me.email,
-            role: me.system_role,
-          });
-        } catch {
-          await supabase.auth.signOut();
+        if (error || !session) {
+          if (isAuthenticated) logout();
           if (!isPublicPath(pathname)) router.push('/');
+        } else if (!isAuthenticated && session) {
+          try {
+            const { data: me } = await api.get<{
+              id?: string;
+              email: string;
+              first_name: string | null;
+              last_name: string | null;
+              system_role: string;
+            }>('/api/v1/auth/me');
+            if (!mounted) return;
+            const displayName =
+              `${me.first_name ?? ''} ${me.last_name ?? ''}`.trim() || me.email;
+            login({
+              id: me.id,
+              name: displayName,
+              email: me.email,
+              role: me.system_role,
+            });
+            void queryClient.prefetchQuery({
+              queryKey: ['residents'],
+              queryFn: async () => {
+                const { data } = await api.get('/api/v1/residents');
+                return data;
+              },
+            });
+          } catch {
+            if (mounted) await supabase.auth.signOut();
+            if (!isPublicPath(pathname)) router.push('/');
+          }
         }
+      } finally {
+        if (mounted) setIsVerifyingSession(false);
       }
-
-      setIsVerifyingSession(false);
     };
 
     void verifySecureSession();
@@ -107,7 +115,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [pathname, isAuthenticated, login, logout, router]);
+  }, [pathname, isAuthenticated, login, logout, router, queryClient]);
 
   if (isVerifyingSession && !isPublicPath(pathname)) {
     return (
@@ -120,7 +128,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAuthenticated && !isPublicPath(pathname)) return null;
+  if (!isAuthenticated && !isPublicPath(pathname)) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-50 p-6 text-center">
+        <p className="text-sm font-medium text-slate-700">Sign in required</p>
+        <p className="max-w-sm text-xs text-slate-500">
+          Redirecting to the sign-in page. If nothing happens, use the button below.
+        </p>
+        <button
+          type="button"
+          onClick={() => router.replace('/')}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Go to sign in
+        </button>
+      </div>
+    );
+  }
 
   if (pathname === '/') return <>{children}</>;
 
@@ -136,9 +160,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         />
       )}
 
+      {/* Mobile: when closed, use display:none so no off-canvas layer can steal taps (transform+pointer-events is not reliable everywhere). */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${
-          isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
+        className={`h-screen w-64 shrink-0 ${
+          isMobileMenuOpen
+            ? 'fixed inset-y-0 left-0 z-50 flex max-w-[85vw] md:relative md:inset-auto md:z-auto md:max-w-none'
+            : 'hidden md:flex md:relative'
         }`}
       >
         <Sidebar />

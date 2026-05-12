@@ -4,35 +4,8 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useGlobalStore } from "@/store/useGlobalStore";
 import { Shield, Loader2, Lock, Mail, ChevronRight } from "lucide-react";
-import { createClient } from "@supabase/supabase-js";
 import { api } from "@/lib/api";
-
-// Initialize Supabase client
-// In production, these should be securely stored in your .env.local file
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
-
-function isPlaceholder(value: string): boolean {
-  const v = value.trim();
-  return v === "" || v === "..." || v.toLowerCase() === "changeme";
-}
-
-function isValidHttpUrl(value: string): boolean {
-  try {
-    const u = new URL(value);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-// Only create the client when env vars look real (prevents runtime 500s during setup).
-const supabase =
-  !isPlaceholder(supabaseUrl) &&
-  !isPlaceholder(supabaseAnonKey) &&
-  isValidHttpUrl(supabaseUrl)
-    ? createClient(supabaseUrl, supabaseAnonKey)
-    : null;
+import { getSupabaseBrowserClient } from "@/lib/supabase-browser";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -47,6 +20,7 @@ export default function LoginPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    const supabase = getSupabaseBrowserClient();
     if (!supabase) {
       setError("Supabase credentials not configured in .env.local");
       return;
@@ -114,6 +88,7 @@ export default function LoginPage() {
 
   const handleForgotPassword = async () => {
     const addr = email.trim().toLowerCase();
+    const supabase = getSupabaseBrowserClient();
     if (!addr || !supabase) {
       setError("Enter your email address above, then click Forgot password.");
       return;

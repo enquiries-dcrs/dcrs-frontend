@@ -29,10 +29,11 @@ export default function DashboardPage() {
     {
       id: "risk-1",
       type: "HIGH_UTI_DECLINE_RISK",
-      residentName: "Arthur Smith",
-      residentId: "55555555-5555-5555-5555-555555555555",
+      residentName: "Demo resident (not live data)",
+      /** Placeholder — do not route to a random UUID; open a real chart from Service Users or tasks. */
+      residentId: null as string | null,
       drivers:
-        "AI Flag: Weight down 4%, fluid intake down 25% over 72hrs. Mild confusion noted in recent daily note.",
+        "Sample layout only. Wire to your risk engine when production AI governance is approved.",
       homeId: "11111111-1111-1111-1111-111111111111",
     },
   ];
@@ -77,11 +78,15 @@ export default function DashboardPage() {
                   <span className="font-semibold text-gray-900">Analysis: </span>{alert.drivers}
                 </p>
                 <div className="flex gap-2 border-t border-gray-100 pt-3">
-                  <button 
-                    onClick={() => router.push(`/residents/${alert.residentId}`)} 
-                    className="text-blue-600 text-sm font-medium hover:underline"
+                  <button
+                    type="button"
+                    disabled={!alert.residentId}
+                    onClick={() => {
+                      if (alert.residentId) router.push(`/residents/${alert.residentId}`);
+                    }}
+                    className="text-blue-600 text-sm font-medium hover:underline disabled:cursor-not-allowed disabled:text-gray-400 disabled:no-underline"
                   >
-                    View Clinical Record
+                    View clinical record
                   </button>
                   <div className="flex-1"></div>
                   <button className="bg-rose-100 text-rose-800 hover:bg-rose-200 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors">

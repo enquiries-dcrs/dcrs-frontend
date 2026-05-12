@@ -4,12 +4,7 @@
  * to every single outgoing request.
  */
 import axios from 'axios';
-import { createClient } from '@supabase/supabase-js';
-
-// Initialize Supabase to retrieve the active session token
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+import { getSupabaseBrowserClient } from '@/lib/supabase-browser';
 
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000',
@@ -18,6 +13,7 @@ export const api = axios.create({
 // Request Interceptor: The "VIP Pass"
 api.interceptors.request.use(
   async (config) => {
+    const supabase = getSupabaseBrowserClient();
     if (supabase) {
       try {
         // Use getSession() as it's faster and pulls from local storage first.

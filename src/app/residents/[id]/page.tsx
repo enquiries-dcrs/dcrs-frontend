@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter } from 'next/navigation';
 import { useResident } from '@/hooks/useResident';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
+import { formatApiError } from '@/lib/format-api-error';
 
 function todayIsoDate(): string {
   // Use local date; chart_date is stored as a DATE.
@@ -23,6 +24,39 @@ function todayIsoDate(): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+/** Normalise id from the URL so it matches API UUID text (case-insensitive in DB). */
+function canonicalResidentSegment(segment: string): string {
+  return segment.trim().toLowerCase();
+}
+
+/** `useParams()` can lag behind the URL on some client navigations; fall back to the pathname segment. */
+function resolveResidentRouteId(
+  params: Readonly<Record<string, string | string[] | undefined>>,
+  pathname: string | null,
+): string | null {
+  const raw = params?.id;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (s && s !== 'new') return canonicalResidentSegment(s);
+  }
+  if (Array.isArray(raw)) {
+    const s = String(raw[0] ?? '').trim();
+    if (s && s !== 'new') return canonicalResidentSegment(s);
+  }
+  if (pathname) {
+    const m = pathname.match(/^\/residents\/([^/]+)\/?$/);
+    const seg = m?.[1];
+    if (seg && seg !== 'new') {
+      try {
+        return canonicalResidentSegment(decodeURIComponent(seg));
+      } catch {
+        return canonicalResidentSegment(seg);
+      }
+    }
+  }
+  return null;
 }
 
 function taskPriorityIsHighClient(p: string | undefined): boolean {
@@ -2064,11 +2098,26 @@ function AssessmentsTab({ residentId, isReadOnly }: { residentId: string; isRead
   );
 }
 
-export default function ResidentProfilePage({ params }: { params: Promise<{ id: string }> }) {
-  const resolvedParams = React.use(params);
+export default function ResidentProfilePage() {
+  const params = useParams();
+  const pathname = usePathname();
+  const rawParam = params?.id;
+  const residentId = useMemo(
+    () => resolveResidentRouteId({ id: rawParam }, pathname),
+    [rawParam, pathname],
+  );
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { data: resident, isLoading } = useResident(resolvedParams.id);
+  const {
+    data: resident,
+    isLoading,
+    isPending,
+    isFetching,
+    isError: residentDetailIsError,
+    error: residentDetailError,
+  } = useResident(residentId);
+  const residentChartLoading =
+    Boolean(residentId) && resident === undefined && (isPending || isFetching || isLoading);
   const user = useGlobalStore((s) => s.user);
   const [activeTab, setActiveTab] = useState('Overview');
 
@@ -2089,6 +2138,25 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   });
   const [familyInviteSubmitting, setFamilyInviteSubmitting] = useState(false);
 
+  const EMERGENCY_PROFILE_EDIT_ROLES = [
+    'Senior Carer',
+    'Deputy Manager',
+    'Home Manager',
+    'Regional Manager',
+    'Admin',
+  ] as const;
+  const [emergencyForm, setEmergencyForm] = useState({
+    knownAllergies: '',
+    gpPracticeName: '',
+    gpPracticePhone: '',
+    nextOfKinName: '',
+    nextOfKinPhone: '',
+    nextOfKinRelationship: '',
+    advanceCareNotes: '',
+  });
+  const [emergencySaving, setEmergencySaving] = useState(false);
+  const [emergencyDownloadBusy, setEmergencyDownloadBusy] = useState<'json' | 'csv' | null>(null);
+
   const [isProfilePhotoModalOpen, setIsProfilePhotoModalOpen] = useState(false);
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const [profilePhotoPreviewUrl, setProfilePhotoPreviewUrl] = useState<string | null>(null);
@@ -2100,6 +2168,28 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
   useEffect(() => {
     setHeaderPhotoFailed(false);
   }, [resident?.profile_image_url]);
+
+  useEffect(() => {
+    if (!resident?.id) return;
+    setEmergencyForm({
+      knownAllergies: resident.known_allergies ?? '',
+      gpPracticeName: resident.gp_practice_name ?? '',
+      gpPracticePhone: resident.gp_practice_phone ?? '',
+      nextOfKinName: resident.next_of_kin_name ?? '',
+      nextOfKinPhone: resident.next_of_kin_phone ?? '',
+      nextOfKinRelationship: resident.next_of_kin_relationship ?? '',
+      advanceCareNotes: resident.advance_care_notes ?? '',
+    });
+  }, [
+    resident?.id,
+    resident?.known_allergies,
+    resident?.gp_practice_name,
+    resident?.gp_practice_phone,
+    resident?.next_of_kin_name,
+    resident?.next_of_kin_phone,
+    resident?.next_of_kin_relationship,
+    resident?.advance_care_notes,
+  ]);
 
   // --- Modal & Global States ---
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -2166,30 +2256,49 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     }
   });
 
-  const obsQueryEnabled = !isLoading && !!resident?.id && activeTab === 'Observations';
-  const { data: observationsQueryData, isLoading: observationsQueryLoading } = useQuery({
-    queryKey: ['resident-observations', resolvedParams.id, obsTrendRange],
+  const obsQueryEnabled = !residentChartLoading && !!resident?.id && activeTab === 'Observations';
+  const {
+    data: observationsQueryData,
+    isLoading: observationsQueryLoading,
+    isError: observationsQueryIsError,
+  } = useQuery({
+    queryKey: ['resident-observations', residentId, obsTrendRange],
     enabled: obsQueryEnabled,
     queryFn: async () => {
       const since = observationSinceIso(obsTrendRange === '7d' ? 7 : 30);
-      const { data } = await api.get(`/api/v1/residents/${resolvedParams.id}/observations`, {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/observations`, {
         params: { since },
       });
       return data as { observations: Array<any> };
     },
   });
 
-  const { data: observationsSummaryData } = useQuery({
-    queryKey: ['resident-observations-summary', resolvedParams.id],
+  const { data: observationsSummaryData, isError: observationsSummaryIsError } = useQuery({
+    queryKey: ['resident-observations-summary', residentId],
     enabled: obsQueryEnabled,
     queryFn: async () => {
-      const { data } = await api.get(`/api/v1/residents/${resolvedParams.id}/observations/summary`);
+      const { data } = await api.get(`/api/v1/residents/${residentId}/observations/summary`);
       return data as { latestByType: Array<any> };
     },
   });
 
+  const documentsQueryEnabled = Boolean(residentId && resident?.id);
+  const {
+    data: residentDocumentsData,
+    isLoading: residentDocumentsLoading,
+    isError: residentDocumentsIsError,
+  } = useQuery({
+    queryKey: ['resident-documents', residentId],
+    enabled: documentsQueryEnabled,
+    queryFn: async () => {
+      const { data } = await api.get(`/api/v1/residents/${residentId}/documents`);
+      return data as { documents: Array<any> };
+    },
+  });
+
   const trendPoints = useMemo(() => {
-    const rows = observationsQueryData?.observations ?? [];
+    const raw = observationsQueryData?.observations;
+    const rows = Array.isArray(raw) ? raw : [];
     const filtered = rows
       .filter((o: any) => String(o.type) === obsTrendType)
       .map((o: any) => ({
@@ -2209,7 +2318,22 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     return list;
   }, [resident?.tasks, taskListFilter]);
 
-  if (isLoading) {
+  if (!residentId) {
+    return (
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 p-8 text-center">
+        <p className="text-rose-600 font-medium">This service user link is not valid.</p>
+        <button
+          type="button"
+          onClick={() => router.push('/residents')}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Back to service users
+        </button>
+      </div>
+    );
+  }
+
+  if (residentChartLoading) {
     return (
       <div className="flex h-[60vh] items-center justify-center flex-col space-y-4 animate-in fade-in">
         <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
@@ -2218,21 +2342,139 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     );
   }
 
+  if (!resident && residentDetailIsError) {
+    const { title, detail } = formatApiError(residentDetailError);
+    return (
+      <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4 p-8 text-center">
+        <p className="text-lg font-semibold text-rose-700">{title}</p>
+        <p className="max-w-md text-sm text-slate-600">{detail}</p>
+        <button
+          type="button"
+          onClick={() => void queryClient.invalidateQueries({ queryKey: ['resident', residentId] })}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          onClick={() => router.push('/residents')}
+          className="text-sm font-medium text-slate-600 hover:text-slate-900"
+        >
+          Back to service users
+        </button>
+      </div>
+    );
+  }
+
   if (!resident) {
     return <div className="p-8 text-center text-rose-500">Resident not found.</div>;
   }
+
+  const documents = residentDocumentsData?.documents ?? [];
 
   const isReadOnly = resident.status === 'ARCHIVED';
   const canAssignTasks = Boolean(user?.role) && TASK_ASSIGN_ROLES.has(user.role as string);
   const canExportResident =
     Boolean(user?.role) &&
     ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(user.role as string);
+  const canUseEmergencyTransfer =
+    Boolean(user?.role) && user.role !== 'Family' && !isReadOnly;
+  const canEditEmergencyTransfer =
+    Boolean(user?.role) &&
+    EMERGENCY_PROFILE_EDIT_ROLES.includes(user.role as (typeof EMERGENCY_PROFILE_EDIT_ROLES)[number]);
   const tabs = ['Overview', 'Care plan', 'Assessments', 'Tasks', 'Food & Drink', 'Activities', 'Daily care', 'PEEP', 'Notes & Incidents', 'Observations', 'eMAR', 'Documents'];
 
   const availableBeds = layoutData?.beds?.filter((b: any) => b.status === 'AVAILABLE') || [];
   const units = layoutData?.units || [];
 
-  const displayObservations = observationsQueryData?.observations ?? resident.observations ?? [];
+  const displayObservations = (() => {
+    const fromQuery = observationsQueryData?.observations;
+    const fromResident = resident.observations;
+    const raw = fromQuery ?? fromResident ?? [];
+    return Array.isArray(raw) ? raw : [];
+  })();
+
+  const saveEmergencyTransferProfile = async () => {
+    if (!canEditEmergencyTransfer) return;
+    setEmergencySaving(true);
+    try {
+      await api.patch(`/api/v1/residents/${resident.id}/emergency-transfer-profile`, {
+        knownAllergies: emergencyForm.knownAllergies.trim() || null,
+        gpPracticeName: emergencyForm.gpPracticeName.trim() || null,
+        gpPracticePhone: emergencyForm.gpPracticePhone.trim() || null,
+        nextOfKinName: emergencyForm.nextOfKinName.trim() || null,
+        nextOfKinPhone: emergencyForm.nextOfKinPhone.trim() || null,
+        nextOfKinRelationship: emergencyForm.nextOfKinRelationship.trim() || null,
+        advanceCareNotes: emergencyForm.advanceCareNotes.trim() || null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+      alert('Emergency transfer details saved.');
+    } catch (e) {
+      console.error(e);
+      let msg = 'Could not save emergency transfer details.';
+      if (e && typeof e === 'object' && 'response' in e) {
+        const d = (e as { response?: { data?: { error?: string } } }).response?.data?.error;
+        if (d) msg = d;
+      }
+      alert(msg);
+    } finally {
+      setEmergencySaving(false);
+    }
+  };
+
+  const downloadEmergencyTransferPack = async (format: 'json' | 'csv') => {
+    setEmergencyDownloadBusy(format);
+    try {
+      if (format === 'json') {
+        const { data } = await api.get(`/api/v1/residents/${resident.id}/emergency-transfer-pack`);
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `emergency-transfer-pack-${resident.id}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } else {
+        const { data: blob } = await api.get(`/api/v1/residents/${resident.id}/emergency-transfer-pack.csv`, {
+          responseType: 'blob',
+        });
+        const dl = new Blob([blob], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(dl);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `emergency-transfer-pack-${resident.id}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch (e) {
+      console.error(e);
+      let msg = format === 'json' ? 'Could not download JSON pack.' : 'Could not download CSV pack.';
+      if (e && typeof e === 'object' && 'response' in e) {
+        const res = (e as { response?: { data?: unknown } }).response;
+        const raw = res?.data;
+        if (raw instanceof Blob) {
+          try {
+            const text = await raw.text();
+            try {
+              const parsed = JSON.parse(text) as { error?: string };
+              if (typeof parsed.error === 'string') msg = parsed.error;
+            } catch {
+              if (text.trim()) msg = text.slice(0, 240);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      alert(msg);
+    } finally {
+      setEmergencyDownloadBusy(null);
+    }
+  };
 
   // --- Core Handlers ---
   const openBedModal = (action: 'transfer' | 'admit') => {
@@ -2294,16 +2536,6 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
     Boolean(userRole) && ['Senior Carer', 'Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(userRole as string);
   const canDeleteDocuments =
     Boolean(userRole) && ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(userRole as string);
-
-  const { data: residentDocumentsData, isLoading: residentDocumentsLoading, isError: residentDocumentsIsError } = useQuery({
-    queryKey: ['resident-documents', resident.id],
-    queryFn: async () => {
-      const { data } = await api.get(`/api/v1/residents/${resident.id}/documents`);
-      return data as { documents: Array<any> };
-    },
-  });
-
-  const documents = residentDocumentsData?.documents ?? [];
 
   const onDocumentFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -2635,8 +2867,13 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
             </h2>
             <div className="flex flex-wrap items-center gap-3 mt-3 text-sm text-gray-600">
               <span className="flex items-center font-medium bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200">
-                <UserCircle className="w-4 h-4 mr-1.5 text-slate-400" /> 
-                {new Date(resident.date_of_birth).toLocaleDateString('en-GB')}
+                <UserCircle className="w-4 h-4 mr-1.5 text-slate-400" />
+                {(() => {
+                  const raw = resident.date_of_birth?.trim();
+                  if (!raw) return '—';
+                  const d = new Date(raw);
+                  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-GB');
+                })()}
               </span>
               <span className="flex items-center font-medium bg-slate-50 px-2.5 py-1 rounded-md border border-slate-200">
                 NHS: {resident.nhs_number}
@@ -2761,6 +2998,125 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                 </div>
               </div>
             )}
+            {canUseEmergencyTransfer && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/90 p-5 shadow-sm">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-lg font-semibold text-amber-950 flex items-center gap-2">
+                      <Hospital className="h-5 w-5 shrink-0 text-amber-700" aria-hidden />
+                      Emergency &amp; hospital transfer pack
+                    </h3>
+                    <p className="mt-1 text-sm text-amber-900/95">
+                      DCRS standard v1: identity, allergies, MAR list, recent observations, PEEP, GP and next of kin,
+                      and advance care pointers. For ambulance and acute handover — verify against original records
+                      before leaving the home.
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={emergencyDownloadBusy !== null}
+                      onClick={() => void downloadEmergencyTransferPack('json')}
+                      className="inline-flex items-center gap-2 rounded-lg border border-amber-700 bg-white px-3 py-2 text-sm font-medium text-amber-950 shadow-sm hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      <Download className="h-4 w-4 shrink-0" aria-hidden />
+                      {emergencyDownloadBusy === 'json' ? 'Preparing…' : 'JSON pack'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={emergencyDownloadBusy !== null}
+                      onClick={() => void downloadEmergencyTransferPack('csv')}
+                      className="inline-flex items-center gap-2 rounded-lg border border-amber-700 bg-amber-800 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-900 disabled:opacity-50"
+                    >
+                      <Download className="h-4 w-4 shrink-0" aria-hidden />
+                      {emergencyDownloadBusy === 'csv' ? 'Preparing…' : 'CSV pack'}
+                    </button>
+                  </div>
+                </div>
+                {!isReadOnly && canEditEmergencyTransfer ? (
+                  <div className="mt-4 space-y-3 border-t border-amber-200/80 pt-4">
+                    <p className="text-xs font-medium text-amber-900">Transfer profile (edit)</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="block text-xs text-amber-900 sm:col-span-2">
+                        Known allergies &amp; intolerances
+                        <textarea
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-amber-500"
+                          rows={2}
+                          value={emergencyForm.knownAllergies}
+                          onChange={(e) => setEmergencyForm((f) => ({ ...f, knownAllergies: e.target.value }))}
+                          maxLength={4000}
+                        />
+                      </label>
+                      <label className="block text-xs text-amber-900">
+                        GP practice
+                        <input
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900"
+                          value={emergencyForm.gpPracticeName}
+                          onChange={(e) => setEmergencyForm((f) => ({ ...f, gpPracticeName: e.target.value }))}
+                          maxLength={500}
+                        />
+                      </label>
+                      <label className="block text-xs text-amber-900">
+                        GP phone
+                        <input
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900"
+                          value={emergencyForm.gpPracticePhone}
+                          onChange={(e) => setEmergencyForm((f) => ({ ...f, gpPracticePhone: e.target.value }))}
+                          maxLength={80}
+                        />
+                      </label>
+                      <label className="block text-xs text-amber-900">
+                        Next of kin name
+                        <input
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900"
+                          value={emergencyForm.nextOfKinName}
+                          onChange={(e) => setEmergencyForm((f) => ({ ...f, nextOfKinName: e.target.value }))}
+                          maxLength={200}
+                        />
+                      </label>
+                      <label className="block text-xs text-amber-900">
+                        Next of kin phone
+                        <input
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900"
+                          value={emergencyForm.nextOfKinPhone}
+                          onChange={(e) => setEmergencyForm((f) => ({ ...f, nextOfKinPhone: e.target.value }))}
+                          maxLength={80}
+                        />
+                      </label>
+                      <label className="block text-xs text-amber-900 sm:col-span-2">
+                        Relationship
+                        <input
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900"
+                          value={emergencyForm.nextOfKinRelationship}
+                          onChange={(e) =>
+                            setEmergencyForm((f) => ({ ...f, nextOfKinRelationship: e.target.value }))
+                          }
+                          maxLength={120}
+                        />
+                      </label>
+                      <label className="block text-xs text-amber-900 sm:col-span-2">
+                        Advance care (e.g. where RESPECT / DNACPR is filed — not a legal form in this box)
+                        <textarea
+                          className="mt-1 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:ring-2 focus:ring-amber-500"
+                          rows={2}
+                          value={emergencyForm.advanceCareNotes}
+                          onChange={(e) => setEmergencyForm((f) => ({ ...f, advanceCareNotes: e.target.value }))}
+                          maxLength={4000}
+                        />
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={emergencySaving}
+                      onClick={() => void saveEmergencyTransferProfile()}
+                      className="rounded-lg bg-amber-800 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-900 disabled:opacity-50"
+                    >
+                      {emergencySaving ? 'Saving…' : 'Save transfer profile'}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
               <div className="space-y-4">
@@ -2809,9 +3165,17 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
                 <li className="text-sm bg-rose-50 text-rose-800 border-rose-100 p-3 rounded-lg border">
                   <span className="font-semibold block mb-1">High Fall Risk</span>Requires assistance with mobility.
                 </li>
-                <li className="text-sm bg-amber-50 text-amber-800 border-amber-100 p-3 rounded-lg border">
-                  <span className="font-semibold block mb-1">Allergy: Penicillin</span>Severe reaction noted on file.
-                </li>
+                {resident.known_allergies ? (
+                  <li className="text-sm bg-rose-50 text-rose-800 border-rose-100 p-3 rounded-lg border">
+                    <span className="font-semibold block mb-1">Allergies (transfer profile)</span>
+                    {resident.known_allergies}
+                  </li>
+                ) : (
+                  <li className="text-sm bg-slate-50 text-slate-600 border-slate-100 p-3 rounded-lg border">
+                    <span className="font-semibold block mb-1">Allergies</span>
+                    No allergies recorded in the emergency transfer profile yet.
+                  </li>
+                )}
               </ul>
             </div>
           </div>
@@ -3355,7 +3719,17 @@ export default function ResidentProfilePage({ params }: { params: Promise<{ id: 
             </div>
           </div>
 
-          {observationsSummaryData?.latestByType && observationsSummaryData.latestByType.length > 0 ? (
+          {(observationsQueryIsError || observationsSummaryIsError) && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+              <p className="font-medium">Observations feed could not be refreshed</p>
+              <p className="mt-1 text-xs text-amber-900/90">
+                The table below may show data from the main record only. If this persists, confirm the observations
+                migration is applied on the API database.
+              </p>
+            </div>
+          )}
+
+          {Array.isArray(observationsSummaryData?.latestByType) && observationsSummaryData.latestByType.length > 0 ? (
             <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
               <span className="w-full text-xs font-semibold uppercase tracking-wide text-slate-500">Latest by type</span>
               {observationsSummaryData.latestByType.slice(0, 8).map((o: any) => (
