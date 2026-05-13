@@ -6,6 +6,10 @@ import { api } from "@/lib/api";
 import { useGlobalStore } from "@/store/useGlobalStore";
 import { formatApiError } from "@/lib/format-api-error";
 import { isValidUuid } from "@/lib/uuid";
+import {
+  mergeCommunalBathroomItems,
+  type ChecklistItemRow,
+} from "@/features/facility/communalBathroomChecklistDef";
 import { ChevronLeft, ChevronRight, Droplets, Loader2, Save } from "lucide-react";
 
 function mondayOfWeekLocal(d: Date): string {
@@ -25,19 +29,10 @@ function addWeeksToMonday(mondayIso: string, weeks: number): string {
   return mondayOfWeekLocal(t);
 }
 
-type ChecklistItem = {
-  key: string;
-  label: string;
-  hint: string;
-  done: boolean;
-  completedAt: string | null;
-  completedBy: string | null;
-};
-
 type CleanGetResponse = {
   home: { id: string; name: string };
   weekStartMonday: string;
-  items: ChecklistItem[];
+  items: ChecklistItemRow[];
   supervisorNotes: string | null;
   updatedAt: string | null;
   updatedBy: string | null;
@@ -67,14 +62,21 @@ export default function CommunalBathroomWeeklyCleanPage() {
   const [pickedHome, setPickedHome] = useState<string>("");
 
   const homesList = layout?.homes ?? [];
+  const firstValidHomeId = useMemo(
+    () => homesList.map((h) => h?.id).find((id) => isValidUuid(String(id ?? ""))) ?? "",
+    [homesList]
+  );
+
   const activeHomeId = useMemo(() => {
     if (sidebarScopedHome) return sidebarScopedHome;
     if (!homesList.length) return "";
-    if (pickedHome && homesList.some((h) => h.id === pickedHome)) return pickedHome;
-    return homesList[0].id;
-  }, [sidebarScopedHome, pickedHome, homesList]);
+    if (pickedHome && homesList.some((h) => h.id === pickedHome) && isValidUuid(pickedHome)) return pickedHome;
+    return firstValidHomeId;
+  }, [sidebarScopedHome, pickedHome, homesList, firstValidHomeId]);
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const queryEnabled = isValidUuid(activeHomeId);
+
+  const { data, isLoading, isFetching, isError, error, refetch, isPending } = useQuery({
     queryKey: ["communal-bathroom-weekly-clean", activeHomeId, weekMonday],
     queryFn: async () => {
       const { data: d } = await api.get<CleanGetResponse>("/api/v1/facility/communal-bathroom-weekly-clean", {
@@ -82,16 +84,20 @@ export default function CommunalBathroomWeeklyCleanPage() {
       });
       return d;
     },
-    enabled: isValidUuid(activeHomeId),
+    enabled: queryEnabled,
   });
 
+  const displayItems = useMemo(() => mergeCommunalBathroomItems(data), [data]);
+
+  const checklistInitialLoad = queryEnabled && !data && !isError && (isPending || isLoading || isFetching);
+
   React.useEffect(() => {
-    if (!data?.items) return;
+    if (!displayItems.length) return;
     const next: Record<string, boolean> = {};
-    for (const it of data.items) next[it.key] = it.done;
+    for (const it of displayItems) next[it.key] = it.done;
     setChecks(next);
-    setSupervisorNotes(data.supervisorNotes || "");
-  }, [data?.weekStartMonday, data?.home?.id, data?.updatedAt]);
+    setSupervisorNotes(data?.supervisorNotes || "");
+  }, [data?.weekStartMonday, data?.home?.id, data?.updatedAt, data?.supervisorNotes, displayItems]);
 
   React.useEffect(() => {
     if (sidebarScopedHome != null || !layout?.homes?.length) return;
@@ -126,20 +132,23 @@ export default function CommunalBathroomWeeklyCleanPage() {
   });
 
   const progress = useMemo(() => {
-    const keys = data?.items?.map((i) => i.key) ?? [];
+    const keys = displayItems.map((i) => i.key);
     if (!keys.length) return { done: 0, total: 0 };
     const done = keys.filter((k) => checks[k]).length;
     return { done, total: keys.length };
-  }, [data?.items, checks]);
+  }, [displayItems, checks]);
 
   const needsHomePick = !sidebarScopedHome && !layoutLoading && homesList.length === 0;
 
   const waitingForHomes = !sidebarScopedHome && layoutLoading;
 
+  const homesLoadedButNoValidHomeId =
+    !sidebarScopedHome && !layoutLoading && homesList.length > 0 && !queryEnabled;
+
   const homeLabel =
     sidebarScopedHome != null
       ? homesList.find((h) => h.id === sidebarScopedHome)?.name ?? data?.home?.name ?? "Selected home"
-      : homesList.find((h) => h.id === (pickedHome || homesList[0]?.id))?.name ?? data?.home?.name ?? "";
+      : homesList.find((h) => h.id === (pickedHome || firstValidHomeId))?.name ?? data?.home?.name ?? "";
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6 pb-20 animate-in fade-in">
@@ -220,18 +229,27 @@ export default function CommunalBathroomWeeklyCleanPage() {
         <p className="text-sm font-medium text-amber-800">
           No homes are available in your account scope. Check access or try again later.
         </p>
-      ) : isLoading ? (
+      ) : homesLoadedButNoValidHomeId ? (
+        <p className="text-sm font-medium text-amber-800">
+          Facility layout returned homes without a usable id. Refresh the page or contact support.
+        </p>
+      ) : checklistInitialLoad ? (
         <div className="flex items-center gap-2 text-gray-600">
           <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
           Loading checklist…
         </div>
       ) : isError ? (
         <p className="text-sm text-rose-700">{formatApiError(error).detail}</p>
-      ) : data ? (
+      ) : queryEnabled && displayItems.length > 0 ? (
         <>
           <div className="rounded-lg border border-cyan-100 bg-cyan-50/80 px-4 py-2 text-sm text-cyan-950">
-            <strong>{data.home.name}</strong> · {progress.done} / {progress.total} tasks marked complete
-            {data.updatedAt ? (
+            <strong>{data?.home?.name ?? homeLabel}</strong> · {progress.done} / {progress.total} tasks marked complete
+            {!data?.items?.length ? (
+              <span className="ml-2 text-xs text-amber-800">
+                Checklist loaded from app defaults (API returned no rows). Save still syncs to the server.
+              </span>
+            ) : null}
+            {data?.updatedAt ? (
               <span className="ml-2 text-xs text-cyan-900/80">
                 Last saved {new Date(data.updatedAt).toLocaleString("en-GB")}
                 {data.updatedBy ? ` · ${data.updatedBy}` : ""}
@@ -240,7 +258,7 @@ export default function CommunalBathroomWeeklyCleanPage() {
           </div>
 
           <ul className="divide-y divide-gray-100 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            {data.items.map((item) => (
+            {displayItems.map((item) => (
               <li key={item.key} className="flex gap-3 p-4 hover:bg-slate-50/80">
                 <input
                   id={`cb-${item.key}`}
@@ -288,16 +306,17 @@ export default function CommunalBathroomWeeklyCleanPage() {
           <div className="flex justify-end">
             <button
               type="button"
-              disabled={saveMutation.isPending || !data?.items?.length}
+              disabled={saveMutation.isPending || !displayItems.length}
               onClick={() => {
-                if (!data?.items?.length) return;
+                if (!displayItems.length) return;
                 const checklistState: Record<string, { done: boolean }> = {};
-                for (const it of data.items) {
+                for (const it of displayItems) {
                   checklistState[it.key] = { done: Boolean(checks[it.key]) };
                 }
+                const hid = data?.home?.id ?? activeHomeId;
                 saveMutation.mutate({
                   checklistState,
-                  homeId: data.home.id,
+                  homeId: hid,
                   weekMonday,
                   supervisorNotes,
                 });
