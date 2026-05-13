@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useGlobalStore } from "@/store/useGlobalStore";
 import { formatApiError } from "@/lib/format-api-error";
-import { isValidUuid } from "@/lib/uuid";
+import { facilityHomesList, isValidUuid } from "@/lib/uuid";
 import {
   mergeCommunalBathroomItems,
   type ChecklistItemRow,
@@ -61,7 +61,7 @@ export default function CommunalBathroomWeeklyCleanPage() {
 
   const [pickedHome, setPickedHome] = useState<string>("");
 
-  const homesList = layout?.homes ?? [];
+  const homesList = useMemo(() => facilityHomesList(layout?.homes), [layout?.homes]);
   const firstValidHomeId = useMemo(
     () => homesList.map((h) => h?.id).find((id) => isValidUuid(String(id ?? ""))) ?? "",
     [homesList]
@@ -100,12 +100,12 @@ export default function CommunalBathroomWeeklyCleanPage() {
   }, [data?.weekStartMonday, data?.home?.id, data?.updatedAt, data?.supervisorNotes, displayItems]);
 
   React.useEffect(() => {
-    if (sidebarScopedHome != null || !layout?.homes?.length) return;
+    if (sidebarScopedHome != null || !homesList.length) return;
     setPickedHome((prev) => {
-      if (prev && layout.homes.some((h) => h.id === prev)) return prev;
-      return layout.homes[0].id;
+      if (prev && homesList.some((h) => h.id === prev)) return prev;
+      return homesList[0].id;
     });
-  }, [layout?.homes, sidebarScopedHome]);
+  }, [homesList, sidebarScopedHome]);
 
   const saveMutation = useMutation({
     mutationFn: async (payload: {
@@ -231,7 +231,8 @@ export default function CommunalBathroomWeeklyCleanPage() {
         </p>
       ) : homesLoadedButNoValidHomeId ? (
         <p className="text-sm font-medium text-amber-800">
-          Facility layout returned homes without a usable id. Refresh the page or contact support.
+          Homes were returned but none had a usable id field (expected <code className="rounded bg-amber-100 px-1">id</code> or{" "}
+          <code className="rounded bg-amber-100 px-1">home_id</code>). Check the facility-layout API response or refresh.
         </p>
       ) : checklistInitialLoad ? (
         <div className="flex items-center gap-2 text-gray-600">

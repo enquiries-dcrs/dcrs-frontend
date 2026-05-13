@@ -1,13 +1,13 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Home, Bed, Users, Pill, BarChart3, Settings, LogOut, Droplets } from 'lucide-react';
 import { useGlobalStore } from '@/store/useGlobalStore';
 import { api } from '@/lib/api';
-import { isValidUuid } from '@/lib/uuid';
+import { facilityHomesList, isValidUuid } from '@/lib/uuid';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -27,7 +27,7 @@ export function Sidebar() {
     staleTime: 60_000,
   });
 
-  const homes = layout?.homes ?? [];
+  const homes = useMemo(() => facilityHomesList(layout?.homes), [layout?.homes]);
 
   useEffect(() => {
     if (selectedHomeId === 'ALL') return;
