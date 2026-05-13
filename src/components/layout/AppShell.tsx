@@ -162,6 +162,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Mobile: when closed, use display:none so no off-canvas layer can steal taps (transform+pointer-events is not reliable everywhere). */}
       <div
+        id="app-shell-sidebar-wrap"
         className={`h-screen w-64 shrink-0 ${
           isMobileMenuOpen
             ? 'fixed inset-y-0 left-0 z-50 flex max-w-[85vw] md:relative md:inset-auto md:z-auto md:max-w-none'
@@ -171,8 +172,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Sidebar />
       </div>
 
-      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="z-30 flex shrink-0 items-center bg-[#1e293b] p-3 text-white shadow-md md:hidden">
+      <div id="app-shell-main-column" className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div
+          id="app-shell-mobile-nav"
+          className="z-30 flex shrink-0 items-center bg-[#1e293b] p-3 text-white shadow-md md:hidden">
           <button
             type="button"
             onClick={() => setIsMobileMenuOpen(true)}

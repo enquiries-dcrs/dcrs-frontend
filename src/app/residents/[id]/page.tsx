@@ -5,6 +5,7 @@ import { useParams, usePathname, useRouter } from 'next/navigation';
 import { useResident } from '@/hooks/useResident';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import Link from 'next/link';
 import { 
   ArrowLeft, MapPin, UserCircle, Loader2, X, FileUp, File, Sparkles, 
   FileText, Mail, Globe, AlertCircle, Plus, CheckCircle2, AlertTriangle, 
@@ -12,11 +13,13 @@ import {
   Download,
   Heart,
   UserPlus,
+  Printer,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
 import { formatApiError } from '@/lib/format-api-error';
 import { TopicalApplicationsTab } from '@/features/residents/TopicalApplicationsTab';
+import { resolveResidentRouteId } from '@/lib/resident-route';
 
 function todayIsoDate(): string {
   // Use local date; chart_date is stored as a DATE.
@@ -25,39 +28,6 @@ function todayIsoDate(): string {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
-}
-
-/** Normalise id from the URL so it matches API UUID text (case-insensitive in DB). */
-function canonicalResidentSegment(segment: string): string {
-  return segment.trim().toLowerCase();
-}
-
-/** `useParams()` can lag behind the URL on some client navigations; fall back to the pathname segment. */
-function resolveResidentRouteId(
-  params: Readonly<Record<string, string | string[] | undefined>>,
-  pathname: string | null,
-): string | null {
-  const raw = params?.id;
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (s && s !== 'new') return canonicalResidentSegment(s);
-  }
-  if (Array.isArray(raw)) {
-    const s = String(raw[0] ?? '').trim();
-    if (s && s !== 'new') return canonicalResidentSegment(s);
-  }
-  if (pathname) {
-    const m = pathname.match(/^\/residents\/([^/]+)\/?$/);
-    const seg = m?.[1];
-    if (seg && seg !== 'new') {
-      try {
-        return canonicalResidentSegment(decodeURIComponent(seg));
-      } catch {
-        return canonicalResidentSegment(seg);
-      }
-    }
-  }
-  return null;
 }
 
 function taskPriorityIsHighClient(p: string | undefined): boolean {
@@ -2905,6 +2875,13 @@ export default function ResidentProfilePage() {
         </div>
         
         <div className="flex flex-wrap gap-3">
+          <Link
+            href={`/residents/${resident.id}/summary`}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-800 rounded-lg shadow-sm hover:bg-gray-50 font-medium transition-colors print:hidden"
+          >
+            <Printer className="h-4 w-4 text-gray-600" aria-hidden />
+            Print summary
+          </Link>
           {!isReadOnly && resident.status === 'ADMITTED' && (
             <>
               <button

@@ -24,3 +24,25 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Printable service user summary: hide app chrome when printing from /residents/[id]/summary */
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  html[data-print-summary="1"] #app-shell-sidebar-wrap,
+  html[data-print-summary="1"] #app-shell-mobile-nav,
+  html[data-print-summary="1"] #app-shell-header {
+    display: none !important;
+  }
+
+  html[data-print-summary="1"] #app-shell-main-column {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  html[data-print-summary="1"] body {
+    background: #fff !important;
+  }
+}

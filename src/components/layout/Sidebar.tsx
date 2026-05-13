@@ -57,7 +57,7 @@ export function Sidebar() {
   };
 
   return (
-    <nav className="w-64 bg-[#1e293b] text-slate-300 flex flex-col shrink-0 z-10 h-screen sticky top-0">
+    <nav id="app-shell-sidebar" className="w-64 bg-[#1e293b] text-slate-300 flex flex-col shrink-0 z-10 h-screen sticky top-0">
       <div className="p-4 border-b border-slate-700/50 mb-4">
         <h1 className="text-xl font-bold text-white tracking-tight">DCRS Care</h1>
         <p className="text-xs text-slate-400 mt-1">Production Platform</p>

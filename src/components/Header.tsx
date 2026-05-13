@@ -1,6 +1,6 @@
 export default function Header() {
   return (
-    <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 px-4 py-3 backdrop-blur">
+    <header id="app-shell-header" className="sticky top-0 z-10 border-b border-zinc-200 bg-white/80 px-4 py-3 backdrop-blur">
       <div className="mx-auto flex w-full max-w-5xl items-center justify-between">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-zinc-900">
