@@ -14,6 +14,7 @@ import {
   Heart,
   UserPlus,
   Printer,
+  Archive,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
@@ -2199,6 +2200,7 @@ export default function ResidentProfilePage() {
   const [handoverSummary, setHandoverSummary] = useState('');
   const [isDraftingIncident, setIsDraftingIncident] = useState(false);
   const [incidentDraft, setIncidentDraft] = useState('');
+  const [archiving, setArchiving] = useState(false);
 
   // --- Observations Tab State ---
   const [isAddingObservation, setIsAddingObservation] = useState(false);
@@ -2348,6 +2350,9 @@ export default function ResidentProfilePage() {
   const canExportResident =
     Boolean(user?.role) &&
     ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(user.role as string);
+  const canArchiveDischargedResident =
+    Boolean(user?.role) &&
+    ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(user.role as string);
   const canUseEmergencyTransfer =
     Boolean(user?.role) && user.role !== 'Family' && !isReadOnly;
   const canEditEmergencyTransfer =
@@ -2493,12 +2498,43 @@ export default function ResidentProfilePage() {
       await api.post(`/api/v1/residents/${resident.id}/discharge`, dischargeForm);
       alert('Discharge successful!');
       setIsDischargeModalOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ['residents'] });
       router.push('/residents');
     } catch (error) {
       console.error(error);
       alert('Failed to discharge resident. Make sure the backend endpoint exists.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleArchiveDischarged = async () => {
+    if (
+      !window.confirm(
+        'Archive this discharged service user? They will leave the main Service Users list (enable “Show archived” to find them). The record stays available read-only for audit.'
+      )
+    ) {
+      return;
+    }
+    setArchiving(true);
+    try {
+      await api.post(`/api/v1/residents/${resident.id}/archive`);
+      await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+      await queryClient.invalidateQueries({ queryKey: ['residents'] });
+      alert('Service user archived.');
+      router.push('/residents');
+    } catch (error) {
+      console.error(error);
+      const msg =
+        typeof error === 'object' &&
+        error !== null &&
+        'response' in error &&
+        typeof (error as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+          ? (error as { response: { data: { error: string } } }).response.data.error
+          : 'Could not archive. Check permissions and that the person is discharged.';
+      alert(msg);
+    } finally {
+      setArchiving(false);
     }
   };
 
@@ -2907,6 +2943,21 @@ export default function ResidentProfilePage() {
               className="px-4 py-2 bg-blue-600 text-white rounded-lg shadow-sm hover:bg-blue-700 font-medium transition-colors"
             >
               {resident.status === 'PENDING' ? 'Admit' : 'Readmit'}
+            </button>
+          )}
+          {!isReadOnly && resident.status === 'DISCHARGED' && canArchiveDischargedResident && (
+            <button
+              type="button"
+              disabled={archiving}
+              onClick={() => void handleArchiveDischarged()}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-800 rounded-lg shadow-sm hover:bg-slate-50 font-medium transition-colors disabled:opacity-50"
+            >
+              {archiving ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Archive className="h-4 w-4 text-slate-600" aria-hidden />
+              )}
+              Archive record
             </button>
           )}
           {canExportResident && (

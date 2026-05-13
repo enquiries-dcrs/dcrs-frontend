@@ -15,13 +15,15 @@ export type Resident = {
   profile_image_url?: string | null;
 };
 
-export function useResidents() {
+export function useResidents(opts?: { includeArchived?: boolean }) {
+  const includeArchived = Boolean(opts?.includeArchived);
   return useQuery({
-    queryKey: ["residents"],
+    queryKey: ["residents", includeArchived],
     queryFn: async () => {
-      const res = await api.get<Resident[]>("/api/v1/residents");
+      const res = await api.get<Resident[]>("/api/v1/residents", {
+        params: includeArchived ? { includeArchived: "1" } : {},
+      });
       return res.data;
     },
   });
 }
-

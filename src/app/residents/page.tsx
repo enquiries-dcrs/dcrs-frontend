@@ -14,7 +14,7 @@ type ResidentRow = {
   last_name: string | null;
   date_of_birth: string | null;
   nhs_number: string | null;
-  status: "ADMITTED" | "DISCHARGED" | string;
+  status: "ADMITTED" | "DISCHARGED" | "ARCHIVED" | "PENDING" | string;
   profile_image_url?: string | null;
   room_number?: string | number | null;
   unit_name?: string | null;
@@ -23,7 +23,8 @@ type ResidentRow = {
 
 export default function ResidentsPage() {
   const router = useRouter();
-  const { data: residents, isLoading } = useResidents();
+  const [showArchived, setShowArchived] = useState(false);
+  const { data: residents, isLoading } = useResidents({ includeArchived: showArchived });
   const selectedHomeId = useGlobalStore((state) => state.selectedHomeId);
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -34,7 +35,10 @@ export default function ResidentsPage() {
 
     return list.filter((r) => {
       const statusOk =
-        r.status === "ADMITTED" || r.status === "DISCHARGED" || r.status === "PENDING";
+        r.status === "ADMITTED" ||
+        r.status === "DISCHARGED" ||
+        r.status === "PENDING" ||
+        (showArchived && r.status === "ARCHIVED");
       const inScope = selectedHomeId === "ALL" || r.home_id === selectedHomeId;
 
       const fullName = `${r.first_name ?? ""} ${r.last_name ?? ""}`
@@ -47,7 +51,7 @@ export default function ResidentsPage() {
 
       return statusOk && inScope && matches;
     });
-  }, [residents, searchTerm, selectedHomeId]);
+  }, [residents, searchTerm, selectedHomeId, showArchived]);
 
   if (isLoading) {
     return (
@@ -66,6 +70,15 @@ export default function ResidentsPage() {
             Service Users
           </h2>
           <p className="text-gray-500">Manage admitted residents and records.</p>
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+            />
+            Show archived (discharged users moved off the active list)
+          </label>
         </div>
         <button
           type="button"
@@ -158,7 +171,15 @@ export default function ResidentsPage() {
                             </p>
                           </div>
                           <div>
-                            <Badge variant={r.status === "DISCHARGED" ? "warning" : "default"}>
+                            <Badge
+                              variant={
+                                r.status === "DISCHARGED"
+                                  ? "warning"
+                                  : r.status === "ARCHIVED"
+                                    ? "default"
+                                    : "default"
+                              }
+                            >
                               {r.status}
                             </Badge>
                           </div>
