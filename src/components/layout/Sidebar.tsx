@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Home, Bed, Users, Pill, BarChart3, Settings, LogOut, Droplets } from 'lucide-react';
 import { useGlobalStore } from '@/store/useGlobalStore';
 import { api } from '@/lib/api';
+import { isValidUuid } from '@/lib/uuid';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -18,7 +19,7 @@ export function Sidebar() {
   const user = useGlobalStore((state) => state.user);
 
   const { data: layout } = useQuery({
-    queryKey: ['facility-layout', 'sidebar'],
+    queryKey: ['facility-layout'],
     queryFn: async () => {
       const { data } = await api.get<{ homes: Array<{ id: string; name: string }> }>('/api/v1/facility-layout');
       return data;
@@ -29,7 +30,12 @@ export function Sidebar() {
   const homes = layout?.homes ?? [];
 
   useEffect(() => {
-    if (!homes.length || selectedHomeId === 'ALL') return;
+    if (selectedHomeId === 'ALL') return;
+    if (!isValidUuid(selectedHomeId)) {
+      setSelectedHomeId('ALL');
+      return;
+    }
+    if (!homes.length) return;
     const ok = homes.some((h) => h.id === selectedHomeId);
     if (!ok) setSelectedHomeId('ALL');
   }, [homes, selectedHomeId, setSelectedHomeId]);

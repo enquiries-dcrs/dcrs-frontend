@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useGlobalStore } from "@/store/useGlobalStore";
 import { formatApiError } from "@/lib/format-api-error";
+import { isValidUuid } from "@/lib/uuid";
 import { ChevronLeft, ChevronRight, Droplets, Loader2, Save } from "lucide-react";
 
 function mondayOfWeekLocal(d: Date): string {
@@ -50,9 +51,11 @@ export default function CommunalBathroomWeeklyCleanPage() {
   const [checks, setChecks] = useState<Record<string, boolean>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  const effectiveHomeId = selectedHomeId !== "ALL" ? selectedHomeId : null;
+  /** Real DB home id from sidebar; invalid legacy mock UUIDs are ignored here. */
+  const sidebarScopedHome =
+    selectedHomeId !== "ALL" && isValidUuid(selectedHomeId) ? selectedHomeId : null;
 
-  const { data: layout } = useQuery({
+  const { data: layout, isLoading: layoutLoading } = useQuery({
     queryKey: ["facility-layout"],
     queryFn: async () => {
       const { data } = await api.get<{ homes: Array<{ id: string; name: string }> }>("/api/v1/facility-layout");
@@ -63,17 +66,23 @@ export default function CommunalBathroomWeeklyCleanPage() {
 
   const [pickedHome, setPickedHome] = useState<string>("");
 
-  const homeIdForApi = effectiveHomeId || pickedHome || "";
+  const homesList = layout?.homes ?? [];
+  const activeHomeId = useMemo(() => {
+    if (sidebarScopedHome) return sidebarScopedHome;
+    if (!homesList.length) return "";
+    if (pickedHome && homesList.some((h) => h.id === pickedHome)) return pickedHome;
+    return homesList[0].id;
+  }, [sidebarScopedHome, pickedHome, homesList]);
 
   const { data, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["communal-bathroom-weekly-clean", homeIdForApi, weekMonday],
+    queryKey: ["communal-bathroom-weekly-clean", activeHomeId, weekMonday],
     queryFn: async () => {
       const { data: d } = await api.get<CleanGetResponse>("/api/v1/facility/communal-bathroom-weekly-clean", {
-        params: { homeId: homeIdForApi, weekStart: weekMonday },
+        params: { homeId: activeHomeId, weekStart: weekMonday },
       });
       return d;
     },
-    enabled: Boolean(homeIdForApi),
+    enabled: isValidUuid(activeHomeId),
   });
 
   React.useEffect(() => {
@@ -85,12 +94,12 @@ export default function CommunalBathroomWeeklyCleanPage() {
   }, [data?.weekStartMonday, data?.home?.id, data?.updatedAt]);
 
   React.useEffect(() => {
-    if (selectedHomeId !== "ALL" || !layout?.homes?.length) return;
+    if (sidebarScopedHome != null || !layout?.homes?.length) return;
     setPickedHome((prev) => {
       if (prev && layout.homes.some((h) => h.id === prev)) return prev;
       return layout.homes[0].id;
     });
-  }, [layout?.homes, selectedHomeId]);
+  }, [layout?.homes, sidebarScopedHome]);
 
   const saveMutation = useMutation({
     mutationFn: async (payload: {
@@ -123,12 +132,14 @@ export default function CommunalBathroomWeeklyCleanPage() {
     return { done, total: keys.length };
   }, [data?.items, checks]);
 
-  const needsHomePick = selectedHomeId === "ALL" && !pickedHome;
+  const needsHomePick = !sidebarScopedHome && !layoutLoading && homesList.length === 0;
+
+  const waitingForHomes = !sidebarScopedHome && layoutLoading;
 
   const homeLabel =
-    selectedHomeId !== "ALL"
-      ? layout?.homes?.find((h) => h.id === effectiveHomeId)?.name ?? data?.home?.name ?? "Selected home"
-      : layout?.homes?.find((h) => h.id === pickedHome)?.name ?? data?.home?.name ?? "";
+    sidebarScopedHome != null
+      ? homesList.find((h) => h.id === sidebarScopedHome)?.name ?? data?.home?.name ?? "Selected home"
+      : homesList.find((h) => h.id === (pickedHome || homesList[0]?.id))?.name ?? data?.home?.name ?? "";
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-6 pb-20 animate-in fade-in">
@@ -145,22 +156,22 @@ export default function CommunalBathroomWeeklyCleanPage() {
         </div>
       </div>
 
-      {selectedHomeId === "ALL" ? (
+      {sidebarScopedHome == null ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50/90 p-4 shadow-sm">
           <label className="block text-xs font-semibold uppercase tracking-wide text-amber-950">Home</label>
           <select
-            value={pickedHome}
+            value={pickedHome || homesList[0]?.id || ""}
             onChange={(e) => setPickedHome(e.target.value)}
             className="mt-1 w-full max-w-md rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-medium text-gray-900 outline-none focus:ring-2 focus:ring-amber-500"
           >
             <option value="">Select a home…</option>
-            {(layout?.homes ?? []).map((h) => (
+            {homesList.map((h) => (
               <option key={h.id} value={h.id}>
                 {h.name}
               </option>
             ))}
           </select>
-          {!layout?.homes?.length ? (
+          {!homesList.length ? (
             <p className="mt-2 text-xs text-amber-900/80">Loading homes…</p>
           ) : null}
         </div>
@@ -200,8 +211,15 @@ export default function CommunalBathroomWeeklyCleanPage() {
         </div>
       </div>
 
-      {needsHomePick ? (
-        <p className="text-sm font-medium text-amber-800">Choose a home above to load the checklist.</p>
+      {waitingForHomes ? (
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+          Loading homes…
+        </div>
+      ) : needsHomePick ? (
+        <p className="text-sm font-medium text-amber-800">
+          No homes are available in your account scope. Check access or try again later.
+        </p>
       ) : isLoading ? (
         <div className="flex items-center gap-2 text-gray-600">
           <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
@@ -279,7 +297,7 @@ export default function CommunalBathroomWeeklyCleanPage() {
                 }
                 saveMutation.mutate({
                   checklistState,
-                  homeId: homeIdForApi,
+                  homeId: data.home.id,
                   weekMonday,
                   supervisorNotes,
                 });

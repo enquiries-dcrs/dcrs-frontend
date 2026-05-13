@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/Badge";
 import { useGlobalStore } from "@/store/useGlobalStore";
 import { api } from "@/lib/api";
 import { formatApiError } from "@/lib/format-api-error";
+import { isValidUuid } from "@/lib/uuid";
 
 type RiskSeverity = "critical" | "high" | "medium" | "low";
 
@@ -99,7 +100,7 @@ export default function DashboardPage() {
 
   const filteredRiskItems = useMemo(() => {
     const list = riskReview?.items ?? [];
-    if (selectedHomeId === "ALL") return list;
+    if (selectedHomeId === "ALL" || !isValidUuid(selectedHomeId)) return list;
     return list.filter((i) => i.homeId === selectedHomeId);
   }, [riskReview?.items, selectedHomeId]);
 
