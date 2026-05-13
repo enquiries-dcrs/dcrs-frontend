@@ -15,6 +15,7 @@ import {
   UserPlus,
   Printer,
   Archive,
+  Undo2,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { useGlobalStore } from '@/store/useGlobalStore';
@@ -2201,6 +2202,7 @@ export default function ResidentProfilePage() {
   const [isDraftingIncident, setIsDraftingIncident] = useState(false);
   const [incidentDraft, setIncidentDraft] = useState('');
   const [archiving, setArchiving] = useState(false);
+  const [unarchiving, setUnarchiving] = useState(false);
 
   // --- Observations Tab State ---
   const [isAddingObservation, setIsAddingObservation] = useState(false);
@@ -2353,6 +2355,7 @@ export default function ResidentProfilePage() {
   const canArchiveDischargedResident =
     Boolean(user?.role) &&
     ['Deputy Manager', 'Home Manager', 'Regional Manager', 'Admin'].includes(user.role as string);
+  const canUnarchiveArchivedResident = canArchiveDischargedResident;
   const canUseEmergencyTransfer =
     Boolean(user?.role) && user.role !== 'Family' && !isReadOnly;
   const canEditEmergencyTransfer =
@@ -2535,6 +2538,35 @@ export default function ResidentProfilePage() {
       alert(msg);
     } finally {
       setArchiving(false);
+    }
+  };
+
+  const handleUnarchiveArchived = async () => {
+    if (
+      !window.confirm(
+        'Unarchive this service user? Their status will return to Discharged so the record is editable again and they appear in the main Service Users list (unless you archive again).'
+      )
+    ) {
+      return;
+    }
+    setUnarchiving(true);
+    try {
+      await api.post(`/api/v1/residents/${resident.id}/unarchive`);
+      await queryClient.invalidateQueries({ queryKey: ['resident', resident.id] });
+      await queryClient.invalidateQueries({ queryKey: ['residents'] });
+      alert('Service user unarchived. Status is now Discharged.');
+    } catch (error) {
+      console.error(error);
+      const msg =
+        typeof error === 'object' &&
+        error !== null &&
+        'response' in error &&
+        typeof (error as { response?: { data?: { error?: string } } }).response?.data?.error === 'string'
+          ? (error as { response: { data: { error: string } } }).response.data.error
+          : 'Could not unarchive. Check permissions.';
+      alert(msg);
+    } finally {
+      setUnarchiving(false);
     }
   };
 
@@ -2958,6 +2990,21 @@ export default function ResidentProfilePage() {
                 <Archive className="h-4 w-4 text-slate-600" aria-hidden />
               )}
               Archive record
+            </button>
+          )}
+          {resident.status === 'ARCHIVED' && canUnarchiveArchivedResident && (
+            <button
+              type="button"
+              disabled={unarchiving}
+              onClick={() => void handleUnarchiveArchived()}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-emerald-300 text-emerald-900 rounded-lg shadow-sm hover:bg-emerald-50 font-medium transition-colors disabled:opacity-50"
+            >
+              {unarchiving ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Undo2 className="h-4 w-4 text-emerald-700" aria-hidden />
+              )}
+              Unarchive (Discharged)
             </button>
           )}
           {canExportResident && (
